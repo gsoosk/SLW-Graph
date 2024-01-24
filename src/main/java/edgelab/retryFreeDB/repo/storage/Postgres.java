@@ -1,6 +1,10 @@
 package edgelab.retryFreeDB.repo.storage;
 
 import edgelab.proto.Transaction;
+import edgelab.retryFreeDB.repo.storage.DTO.DBData;
+import edgelab.retryFreeDB.repo.storage.DTO.DBDeleteData;
+import edgelab.retryFreeDB.repo.storage.DTO.DBTransaction;
+import edgelab.retryFreeDB.repo.storage.DTO.DBWriteData;
 import lombok.extern.slf4j.Slf4j;
 
 import java.sql.Connection;
@@ -10,7 +14,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.loging.Logger;
 
 @Slf4j
 public class Postgres implements Storage{
@@ -22,12 +25,12 @@ public class Postgres implements Storage{
 
     private String partitionId;
 
-    public Postgres(String port, Logger log) {
+    public Postgres(String port) {
         url = "jdbc:postgresql://localhost:" + port + "/postgres";
     }
 
 
-    private Connection connect() {
+    public Connection connect() {
         Connection conn = null;
         try {
             conn = DriverManager.getConnection(url, user, password);
@@ -188,20 +191,121 @@ public class Postgres implements Storage{
         this.partitionId = partitionId;
     }
 
-    @Override
-    public void twoPL(Transaction transaction) {
+    private void update(Connection conn, DBTransaction transaction) {
+        log.info("Updating the transaction");
+        for (DBData data: transaction.getDataList()) {
+            String lockSQL = "SELECT * FROM ? WHERE ? = ? FOR UPDATE";
+            try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+                updateStmt.setString(1, data.getTable());
+                updateStmt.setString(2, data.getId());
+                updateStmt.setString(3, data.getQuery());
+                updateStmt.executeUpdate();
+            }
+            catch (SQLException ex) {
+                log.info("db error: couldn't lock,  {}", ex.getMessage());
+                return;
+            }
+        }
+        log.info("Locks on rows acquired");
+    }
+    public void lockAll(Connection conn, DBTransaction transaction) {
+        log.info("Acquiring lock for transaction");
+        for (DBData data: transaction.getDataList()) {
+            String lockSQL = "SELECT * FROM ? WHERE ? = ? FOR UPDATE";
+            try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+                updateStmt.setString(1, data.getTable());
+                updateStmt.setString(2, data.getId());
+                updateStmt.setString(3, data.getQuery());
+                updateStmt.executeUpdate();
+            }
+            catch (SQLException ex) {
+                log.info("db error: couldn't lock,  {}", ex.getMessage());
+                return;
+            }
+        }
+        log.info("Locks on rows acquired");
+    }
+    public void lock(Connection conn, DBData data) throws SQLException {
+        log.info("Acquiring lock for data");
+        String lockSQL = "SELECT * FROM ? WHERE ? = ? FOR UPDATE";
+        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+            updateStmt.setString(1, data.getTable());
+            updateStmt.setString(2, data.getId());
+            updateStmt.setString(3, data.getQuery());
+            updateStmt.executeUpdate();
+        }
+        catch (SQLException ex) {
+            log.info("db error: couldn't lock,  {}", ex.getMessage());
+            throw ex;
+        }
+        log.info("Locks on rows acquired");
+    }
+
+    public void release(Connection conn) throws SQLException {
+        try {
+            conn.commit();
+        } catch (SQLException e) {
+            log.error("Could not release the locks: {}", e.getMessage());
+            throw e;
+        }
+    }
+
+    public void remove(Connection conn, DBDeleteData data) throws SQLException {
+
+        String SQL = "DELETE FROM ? WHERE ? = ?";
+        try {
+            PreparedStatement pstmt = conn.prepareStatement(SQL);
+            pstmt.setString(1, data.getTable());
+            pstmt.setString(2, data.getId());
+            pstmt.setString(3, data.getQuery());
+            pstmt.executeUpdate();
+
+        } catch (SQLException e) {
+            log.error("Could not remove the data: {}", e.getMessage());
+            throw e;
+        }
+    }
+
+    public void update(Connection conn, DBWriteData data) throws SQLException {
+        String SQL = "UPDATE ? SET  ? = ? WHERE ? = ?";
+        try {
+            PreparedStatement pstmt = conn.prepareStatement(SQL);
+            pstmt.setString(1, data.getTable());
+            pstmt.setString(2, data.getId());
+            pstmt.setString(3, data.getQuery());
+            pstmt.setString(4, data.getVariable());
+            pstmt.setString(5, data.getValue());
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            log.error("Could not remove the data: {}", e.getMessage());
+            throw e;
+        }
+    }
 
 
-        try (Connection conn = connect()) {
-
-
-
-
+    public String get(Connection conn, DBData data) throws SQLException {
+        String value = "";
+        String SQL = "SELECT value FROM ? WHERE ? = ?";
+        try {
+            PreparedStatement pstmt = conn.prepareStatement(SQL);
+            pstmt.setString(1, data.getTable());
+            pstmt.setString(2, data.getId());
+            pstmt.setString(3, data.getQuery());
+            ResultSet rs = pstmt.executeQuery();
+            if (rs.next())
+                value = rs.getString("value");
 
         } catch (SQLException ex) {
-            log.info("Couldn't connect to db,  {}", ex.getMessage());
-        } 
+            log.info(ex.getMessage());
+            throw ex;
+        }
+
+        return value;
     }
+
+
+
+
 }
 
 
