@@ -17,6 +17,7 @@ import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.filefilter.FalseFileFilter;
 
+import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.HashMap;
@@ -33,6 +34,26 @@ public class RetryFreeDBServer {
                 .addService(new RetryFreeDBService(postgresPort))
                 .build();
         this.port = port;
+    }
+
+    public static void main(String[] args) throws IOException, InterruptedException {
+        int port = Integer.parseInt(args[0]);
+        String postgresPort = args[1];
+//      SERVER
+        RetryFreeDBServer server = new RetryFreeDBServer(port, ServerBuilder.forPort(port), postgresPort);
+        server.start();
+        server.blockUntilShutdown();
+    }
+
+    public void start() throws IOException {
+        server.start();
+        log.info("Server started, listening on " + port);
+    }
+
+    private void blockUntilShutdown() throws InterruptedException {
+        if (server != null) {
+            server.awaitTermination();
+        }
     }
 
 
@@ -117,6 +138,7 @@ public class RetryFreeDBServer {
                 responseObserver.onError(e);
             }
         }
+
 
 
 //
