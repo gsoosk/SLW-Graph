@@ -11,8 +11,9 @@ service RetryFreeDBServer {
 //  rpc Clear(Partition) returns (Result) {}
 //  rpc Batch(Values) returns (Result) {}
 //  rpc ChangeMemory(Size) returns (Result) {}
-
-  rpc Update(Transaction) returns (Result) {}
+  rpc BeginTransaction(Empty) returns (Result) {}
+  rpc Update(Data) returns (Result) {}
+  rpc CommitTransaction (TransactionId) returns (Result){}
 }
 
 message Transaction {
@@ -22,10 +23,16 @@ message Transaction {
 message Empty {
 }
 
-message Data {
-  string type = 1;
-  string key = 2;
-  string value = 3;
+message TransactionId {
+  string id = 1;
+}
+
+
+message Data{
+  string transactionId = 1;
+  string type = 2; // read/write/delete/insert
+  string key = 3; // <Table, Id, Query>
+  string value = 4; // <Variable, New Value> (only for write/update) | (,,,) (new record for insert)
 }
 //
 //message Key {
