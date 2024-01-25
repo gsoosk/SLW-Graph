@@ -9,11 +9,14 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 
+import static edgelab.retryFreeDB.RetryFreeDBConfiguration.DELETE_TYPE;
+import static edgelab.retryFreeDB.RetryFreeDBConfiguration.INSERT_TYPE;
+import static edgelab.retryFreeDB.RetryFreeDBConfiguration.WRITE_TYPE;
+
 @Slf4j
 public class DBTransaction {
-    private static final String READ_TYPE = "read";
-    private static final String WRITE_TYPE = "write";
-    private static final String DELETE_TYPE = "delete";
+
+
     @Setter
     @Getter
     private List<DBData> dataList;
@@ -49,17 +52,21 @@ public class DBTransaction {
             d = new DBWriteData();
         else if(type.equals(DELETE_TYPE))
             d = new DBDeleteData();
+        else if(type.equals(INSERT_TYPE))
+            d = new DBInsertData();
         else
             d = new DBData();
 
         d.setTable(keys[0]);
         d.setId(keys[1]);
-        d.setQuery(keys[2]);
+        d.setQuery(Integer.parseInt(keys[2]));
         if (d instanceof DBWriteData) {
             String[] writeKeys = data.getValue().split(",");
             ((DBWriteData) d).setVariable(writeKeys[0]);
             ((DBWriteData) d).setValue(writeKeys[1]);
         }
+        else if (d instanceof DBInsertData)
+            ((DBInsertData) d).setNewRecord(data.getValue());
 
 
         return d;

@@ -5,7 +5,6 @@ import lombok.EqualsAndHashCode;
 
 @EqualsAndHashCode(callSuper = true)
 @Data
-public class DBWriteData extends DBData {
-    private String variable;
-    private String value;
+public class DBInsertData extends DBData{
+    private String newRecord;
 }

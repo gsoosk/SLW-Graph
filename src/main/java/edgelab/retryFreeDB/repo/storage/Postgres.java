@@ -3,6 +3,7 @@ package edgelab.retryFreeDB.repo.storage;
 import edgelab.proto.Transaction;
 import edgelab.retryFreeDB.repo.storage.DTO.DBData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBDeleteData;
+import edgelab.retryFreeDB.repo.storage.DTO.DBInsertData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBTransaction;
 import edgelab.retryFreeDB.repo.storage.DTO.DBWriteData;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +12,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
@@ -30,12 +32,14 @@ public class Postgres implements Storage{
     }
 
 
-    public Connection connect() {
+    public Connection connect() throws SQLException {
         Connection conn = null;
         try {
             conn = DriverManager.getConnection(url, user, password);
+            log.info("Connection created");
         } catch (SQLException e) {
             log.info(e.getMessage());
+            throw e;
         }
         return conn;
     }
@@ -198,7 +202,7 @@ public class Postgres implements Storage{
             try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
                 updateStmt.setString(1, data.getTable());
                 updateStmt.setString(2, data.getId());
-                updateStmt.setString(3, data.getQuery());
+                updateStmt.setInt(3, data.getQuery());
                 updateStmt.executeUpdate();
             }
             catch (SQLException ex) {
@@ -215,7 +219,7 @@ public class Postgres implements Storage{
             try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
                 updateStmt.setString(1, data.getTable());
                 updateStmt.setString(2, data.getId());
-                updateStmt.setString(3, data.getQuery());
+                updateStmt.setInt(3, data.getQuery());
                 updateStmt.executeUpdate();
             }
             catch (SQLException ex) {
@@ -227,12 +231,11 @@ public class Postgres implements Storage{
     }
     public void lock(Connection conn, DBData data) throws SQLException {
         log.info("Acquiring lock for data");
-        String lockSQL = "SELECT * FROM ? WHERE ? = ? FOR UPDATE";
+//        FIXME: Risk of sql injection
+        String lockSQL = "SELECT * FROM "+ data.getTable() +" WHERE " + data.getId() + " = ? FOR UPDATE";
         try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
-            updateStmt.setString(1, data.getTable());
-            updateStmt.setString(2, data.getId());
-            updateStmt.setString(3, data.getQuery());
-            updateStmt.executeUpdate();
+            updateStmt.setInt(1, data.getQuery());
+            updateStmt.executeQuery();
         }
         catch (SQLException ex) {
             log.info("db error: couldn't lock,  {}", ex.getMessage());
@@ -252,12 +255,10 @@ public class Postgres implements Storage{
 
     public void remove(Connection conn, DBDeleteData data) throws SQLException {
 
-        String SQL = "DELETE FROM ? WHERE ? = ?";
+        String SQL = "DELETE FROM "+ data.getTable() +" WHERE " + data.getId() + " = ?";
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
-            pstmt.setString(1, data.getTable());
-            pstmt.setString(2, data.getId());
-            pstmt.setString(3, data.getQuery());
+            pstmt.setInt(1, data.getQuery());
             pstmt.executeUpdate();
 
         } catch (SQLException e) {
@@ -267,45 +268,59 @@ public class Postgres implements Storage{
     }
 
     public void update(Connection conn, DBWriteData data) throws SQLException {
-        String SQL = "UPDATE ? SET  ? = ? WHERE ? = ?";
+        String SQL = "UPDATE " + data.getTable() + " SET  " + data.getVariable() + " = " + data.getValue() + " WHERE "+ data.getId() +" = ?";
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
-            pstmt.setString(1, data.getTable());
-            pstmt.setString(2, data.getId());
-            pstmt.setString(3, data.getQuery());
-            pstmt.setString(4, data.getVariable());
-            pstmt.setString(5, data.getValue());
+            pstmt.setInt(1, data.getQuery());
             pstmt.executeUpdate();
         } catch (SQLException e) {
-            log.error("Could not remove the data: {}", e.getMessage());
+            log.error("Could not write the data: {}", e.getMessage());
             throw e;
         }
     }
 
 
     public String get(Connection conn, DBData data) throws SQLException {
-        String value = "";
-        String SQL = "SELECT value FROM ? WHERE ? = ?";
+        StringBuilder value = new StringBuilder();
+        String SQL = "SELECT * FROM "+ data.getTable() +" WHERE "+data.getId()+" = ?";
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
-            pstmt.setString(1, data.getTable());
-            pstmt.setString(2, data.getId());
-            pstmt.setString(3, data.getQuery());
+            pstmt.setInt(1, data.getQuery());
             ResultSet rs = pstmt.executeQuery();
-            if (rs.next())
-                value = rs.getString("value");
+            ResultSetMetaData metaData = rs.getMetaData();
+            int columnCount = metaData.getColumnCount();
+            if (rs.next()) {
+                for (int i = 1; i <= columnCount; i++) {
+                    Object columnValue = rs.getObject(i);
+                    value.append(metaData.getColumnName(i)).append(":");
+                    if (columnValue instanceof String)
+                        value.append("'").append(columnValue).append("'");
+                    else
+                        value.append(columnValue);
+                    if (i != columnCount)
+                        value.append(",");
+                }
+            }
 
         } catch (SQLException ex) {
-            log.info(ex.getMessage());
+            log.info("could not read: {}", ex.getMessage());
             throw ex;
         }
 
-        return value;
+        return value.toString();
     }
 
 
-
-
+    public void insert(Connection conn, DBInsertData data) throws SQLException {
+        String SQL = "INSERT INTO " + data.getTable() + " VALUES " + data.getNewRecord();
+        try {
+            PreparedStatement pstmt = conn.prepareStatement(SQL);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            log.error("Could not insert the data: {}", e.getMessage());
+            throw e;
+        }
+    }
 }
 
 

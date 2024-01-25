@@ -30,9 +30,9 @@ message TransactionId {
 
 message Data{
   string transactionId = 1;
-  string type = 2; // read/write/delete
+  string type = 2; // read/write/delete/insert
   string key = 3; // <Table, Id, Query>
-  string value = 4; // <Variable, New Value> (only for write/update)
+  string value = 4; // <Variable, New Value> (only for write/update) | (,,,) (new record for insert)
 }
 //
 //message Key {

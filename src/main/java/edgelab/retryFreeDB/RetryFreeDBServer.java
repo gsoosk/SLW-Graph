@@ -7,6 +7,7 @@ import edgelab.proto.Result;
 import edgelab.proto.RetryFreeDBServerGrpc;
 import edgelab.retryFreeDB.repo.storage.DTO.DBData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBDeleteData;
+import edgelab.retryFreeDB.repo.storage.DTO.DBInsertData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBTransaction;
 import edgelab.retryFreeDB.repo.storage.DTO.DBWriteData;
 import edgelab.retryFreeDB.repo.storage.Postgres;
@@ -70,7 +71,9 @@ public class RetryFreeDBServer {
 
         @Override
         public void beginTransaction(Empty request, StreamObserver<Result> responseObserver) {
-            try (Connection conn = repo.connect()) {
+            try  {
+                Connection conn = repo.connect();
+                conn.setAutoCommit(false);
                 transactions.put(Long.toString(lastTransactionId), conn);
                 responseObserver.onNext(Result.newBuilder()
                                         .setStatus(true)
@@ -80,12 +83,21 @@ public class RetryFreeDBServer {
             }
             catch (SQLException ex) {
                 log.info("db error: couldn't connect/commit,  {}", ex.getMessage());
+                responseObserver.onNext(Result.newBuilder()
+                        .setStatus(false)
+                        .setMessage("b error: couldn't connect/commit,  {}").build());
                 responseObserver.onError(ex);
             }
         }
 
         @Override
         public void update(Data request, StreamObserver<Result> responseObserver) {
+            if (!transactions.containsKey(request.getTransactionId())) {
+                responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("no transaction with this id").build());
+                responseObserver.onCompleted();
+                return;
+            }
+
             Connection conn = transactions.get(request.getTransactionId());
             DBData d = DBTransaction.deserializeData(request);
             if (d != null) {
@@ -102,14 +114,16 @@ public class RetryFreeDBServer {
                         repo.remove(conn, (DBDeleteData) d);
                     else if (d instanceof DBWriteData)
                         repo.update(conn, (DBWriteData) d);
+                    else if(d instanceof DBInsertData)
+                        repo.insert(conn, (DBInsertData) d);
                     else
                         result = repo.get(conn, d);
                     responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(result).build());
                     responseObserver.onCompleted();
                 }
                 catch (SQLException ex) {
-                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not perform update").build());
-                    responseObserver.onError(new Exception("Could not perform update"));
+                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not perform update: " + ex.getMessage()).build());
+                    responseObserver.onError(new Exception("Could not perform update: " + ex.getMessage()));
                 }
             }
             else {
@@ -131,6 +145,7 @@ public class RetryFreeDBServer {
             try {
                 repo.release(conn);
                 transactions.remove(transactionId.getId());
+                log.info("Transaciton {} commited", transactionId.getId());
                 responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("released").build());
                 responseObserver.onCompleted();
             } catch (SQLException e) {

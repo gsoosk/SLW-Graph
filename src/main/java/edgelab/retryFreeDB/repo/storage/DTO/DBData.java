@@ -6,7 +6,7 @@ import lombok.Data;
 public class DBData {
     private String table;
     private String id;
-    private String query;
+    private Integer query;
 
 }
 
