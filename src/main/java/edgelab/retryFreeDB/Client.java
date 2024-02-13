@@ -37,9 +37,14 @@ public class Client {
     }
 
     private void buyListing(String PId, String LId) {
+
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
+
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
+
+
+//            Lock Items just for
 
 //            R from P where pid
             Data readFromP = Data.newBuilder()
