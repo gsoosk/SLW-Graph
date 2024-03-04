@@ -62,6 +62,8 @@ public class RetryFreeDBServer {
     public static class RetryFreeDBService extends RetryFreeDBServerGrpc.RetryFreeDBServerImplBase {
         private final Postgres repo;
         Map<String, Connection> transactions;
+        Map<String, Map<String, String>> toInsertIDS;
+        Map<String, String> lastIdUsed;
         private long lastTransactionId;
         public RetryFreeDBService(String postgresPort) {
             repo = new Postgres(postgresPort);
@@ -91,12 +93,26 @@ public class RetryFreeDBServer {
         }
 
         @Override
-        public void update(Data request, StreamObserver<Result> responseObserver) {
-            if (!transactions.containsKey(request.getTransactionId())) {
-                responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("no transaction with this id").build());
-                responseObserver.onCompleted();
-                return;
+        public void lock(Data request, StreamObserver<Result> responseObserver) {
+            if (checkTransactionExists(request.getTransactionId(), responseObserver)) return;
+
+            Connection conn = transactions.get(request.getTransactionId());
+            DBData d = DBTransaction.deserializeData(request);
+            if (d != null) {
+                try {
+                    repo.lock(conn, d);
+                    responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
+                    responseObserver.onCompleted();
+                } catch (SQLException e) {
+                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not lock").build());
+                    responseObserver.onError(new Exception("Could not lock"));
+                }
             }
+
+        }
+        @Override
+        public void lockAndUpdate(Data request, StreamObserver<Result> responseObserver) {
+            if (checkTransactionExists(request.getTransactionId(), responseObserver)) return;
 
             Connection conn = transactions.get(request.getTransactionId());
             DBData d = DBTransaction.deserializeData(request);
@@ -108,23 +124,7 @@ public class RetryFreeDBServer {
                     responseObserver.onError(new Exception("Could not lock"));
                     return;
                 }
-                try {
-                    String result = "done";
-                    if (d instanceof DBDeleteData)
-                        repo.remove(conn, (DBDeleteData) d);
-                    else if (d instanceof DBWriteData)
-                        repo.update(conn, (DBWriteData) d);
-                    else if(d instanceof DBInsertData)
-                        repo.insert(conn, (DBInsertData) d);
-                    else
-                        result = repo.get(conn, d);
-                    responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(result).build());
-                    responseObserver.onCompleted();
-                }
-                catch (SQLException ex) {
-                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not perform update: " + ex.getMessage()).build());
-                    responseObserver.onError(new Exception("Could not perform update: " + ex.getMessage()));
-                }
+                updateDBDataOnRepo(responseObserver, d, conn);
             }
             else {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not deserialize data").build());
@@ -134,12 +134,53 @@ public class RetryFreeDBServer {
 
 
         @Override
-        public void commitTransaction(TransactionId transactionId, StreamObserver<Result> responseObserver) {
-            if (!transactions.containsKey(transactionId.getId())) {
+        public void update(Data request, StreamObserver<Result> responseObserver) {
+            if (checkTransactionExists(request.getTransactionId(), responseObserver)) return;
+
+            Connection conn = transactions.get(request.getTransactionId());
+            DBData d = DBTransaction.deserializeData(request);
+            if (d != null) {
+                updateDBDataOnRepo(responseObserver, d, conn);
+            }
+            else {
+                responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not deserialize data").build());
+                responseObserver.onError(new Exception("Could not deserialize data"));
+            }
+        }
+
+        private void updateDBDataOnRepo(StreamObserver<Result> responseObserver, DBData d, Connection conn) {
+            try {
+                String result = "done";
+                if (d instanceof DBDeleteData)
+                    repo.remove(conn, (DBDeleteData) d);
+                else if (d instanceof DBWriteData)
+                    repo.update(conn, (DBWriteData) d);
+                else if(d instanceof DBInsertData)
+                    repo.insert(conn, (DBInsertData) d);
+                else
+                    result = repo.get(conn, d);
+                responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(result).build());
+                responseObserver.onCompleted();
+            }
+            catch (SQLException ex) {
+                responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not perform update: " + ex.getMessage()).build());
+                responseObserver.onError(new Exception("Could not perform update: " + ex.getMessage()));
+            }
+        }
+
+        private boolean checkTransactionExists(String request, StreamObserver<Result> responseObserver) {
+            if (!transactions.containsKey(request)) {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("no transaction with this id").build());
                 responseObserver.onCompleted();
-                return;
+                return true;
             }
+            return false;
+        }
+
+
+        @Override
+        public void commitTransaction(TransactionId transactionId, StreamObserver<Result> responseObserver) {
+            if (checkTransactionExists(transactionId.getId(), responseObserver)) return;
 
             Connection conn = transactions.get(transactionId.getId());
             try {

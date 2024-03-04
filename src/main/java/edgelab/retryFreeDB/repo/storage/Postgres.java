@@ -244,8 +244,21 @@ public class Postgres implements Storage{
         log.info("Locks on rows acquired");
     }
 
-    public void release(Connection conn) throws SQLException {
-        try {
+
+    public void lockTable(Connection conn, DBInsertData data) throws SQLException {
+        log.info("Acquiring table lock for data");
+//        FIXME: Risk of sql injection
+        String lockSQL = "LOCK TABLE "+ data.getTable() +" IN ACCESS EXCLUSIVE";
+        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+            updateStmt.executeQuery();
+        }
+        catch (SQLException ex) {
+            log.info("db error: couldn't lock the table,  {}", ex.getMessage());
+            throw ex;
+        }
+        log.info("Locks on table {} acquired", data.getTable());
+    }
+public void release(Connection conn) throws SQLException { try {
             conn.commit();
         } catch (SQLException e) {
             log.error("Could not release the locks: {}", e.getMessage());

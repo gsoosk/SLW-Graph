@@ -6,6 +6,8 @@ option java_multiple_files = true;
 
 service RetryFreeDBServer {
   rpc BeginTransaction(Empty) returns (Result) {}
+  rpc Lock(Data) returns (Result) {}
+  rpc LockAndUpdate(Data) returns (Result) {}
   rpc Update(Data) returns (Result) {}
   rpc CommitTransaction (TransactionId) returns (Result){}
 }
