@@ -41,11 +41,6 @@ public class DBTransaction {
 
     public static DBData deserializeData(edgelab.proto.Data data) {
         String type = data.getType();
-        String[] keys = data.getKey().split(",");
-        if(keys.length != 3) {
-            log.error("could not deserialize: not enough keys in Key string");
-            return null;
-        }
         DBData d;
 
         if (type.equals(WRITE_TYPE))
@@ -57,16 +52,30 @@ public class DBTransaction {
         else
             d = new DBData();
 
-        d.setTable(keys[0]);
-        d.setId(keys[1]);
-        d.setQuery(Integer.parseInt(keys[2]));
+
+        if (!type.equals(INSERT_TYPE)) {
+            String[] keys = data.getKey().split(",");
+            if (keys.length != 3) {
+                log.error("could not deserialize: not enough keys in Key string");
+                return null;
+            }
+            d.setTable(keys[0]);
+            d.setId(keys[1]);
+            d.setQuery(Integer.parseInt(keys[2]));
+        }
+        else {
+            d.setTable(data.getKey());
+        }
+
         if (d instanceof DBWriteData) {
             String[] writeKeys = data.getValue().split(",");
             ((DBWriteData) d).setVariable(writeKeys[0]);
             ((DBWriteData) d).setValue(writeKeys[1]);
         }
-        else if (d instanceof DBInsertData)
+        else if (d instanceof DBInsertData) {
             ((DBInsertData) d).setNewRecord(data.getValue());
+            ((DBInsertData) d).setRecordId(data.getRecordId());
+        }
 
 
         return d;

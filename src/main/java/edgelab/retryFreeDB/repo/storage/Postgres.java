@@ -1,6 +1,5 @@
 package edgelab.retryFreeDB.repo.storage;
 
-import edgelab.proto.Transaction;
 import edgelab.retryFreeDB.repo.storage.DTO.DBData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBDeleteData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBInsertData;
@@ -9,11 +8,13 @@ import edgelab.retryFreeDB.repo.storage.DTO.DBWriteData;
 import lombok.extern.slf4j.Slf4j;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -231,17 +232,29 @@ public class Postgres implements Storage{
     }
     public void lock(Connection conn, DBData data) throws SQLException {
         log.info("Acquiring lock for data");
+        if (!(data instanceof DBInsertData)) {
 //        FIXME: Risk of sql injection
-        String lockSQL = "SELECT * FROM "+ data.getTable() +" WHERE " + data.getId() + " = ? FOR UPDATE";
-        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
-            updateStmt.setInt(1, data.getQuery());
-            updateStmt.executeQuery();
+            String lockSQL = "SELECT * FROM " + data.getTable() + " WHERE " + data.getId() + " = ? FOR UPDATE";
+            try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+                updateStmt.setInt(1, data.getQuery());
+                updateStmt.executeQuery();
+            } catch (SQLException ex) {
+                log.info("db error: couldn't lock,  {}", ex.getMessage());
+                throw ex;
+            }
+            log.info("Locks on rows acquired");
         }
-        catch (SQLException ex) {
-            log.info("db error: couldn't lock,  {}", ex.getMessage());
-            throw ex;
+        else {
+            String lockSQL = "SELECT pg_advisory_xact_lock(?)";
+            try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+                updateStmt.setInt(1, Integer.parseInt(((DBInsertData) data).getRecordId()));
+                updateStmt.executeQuery();
+            } catch (SQLException ex) {
+                log.info("db error: couldn't lock,  {}", ex.getMessage());
+                throw ex;
+            }
+            log.info("Locks on id {} for insert acquired", ((DBInsertData) data).getRecordId());
         }
-        log.info("Locks on rows acquired");
     }
 
 
@@ -325,7 +338,7 @@ public void release(Connection conn) throws SQLException { try {
 
 
     public void insert(Connection conn, DBInsertData data) throws SQLException {
-        String SQL = "INSERT INTO " + data.getTable() + " VALUES " + data.getNewRecord();
+        String SQL = "INSERT INTO " + data.getTable() + " VALUES  (" + data.getRecordId() + "," + data.getNewRecord() + ")";
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
             pstmt.executeUpdate();
@@ -333,6 +346,32 @@ public void release(Connection conn) throws SQLException { try {
             log.error("Could not insert the data: {}", e.getMessage());
             throw e;
         }
+    }
+
+    public Integer lastId(String table) throws SQLException {
+
+        try (Connection conn = connect()) {
+            DatabaseMetaData metaData = conn.getMetaData();
+            try (ResultSet columns = metaData.getColumns(null, null, table.toLowerCase(), null)) {
+                if (columns.next()) {
+                    String firstColumnName = columns.getString("COLUMN_NAME");
+                    String query = "SELECT MAX(\"" + firstColumnName + "\") FROM " + table;
+                    try (Statement statement = conn.createStatement();
+                         ResultSet resultSet = statement.executeQuery(query)) {
+                        if (resultSet.next()) {
+                            int nextId = Integer.parseInt(resultSet.getString(1));
+                            conn.close();
+                            return nextId;
+                        }
+                    }
+                }
+            }
+        } catch (SQLException ex) {
+            log.info(ex.getMessage());
+            throw ex;
+        }
+
+        return 0;
     }
 }
 

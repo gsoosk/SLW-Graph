@@ -35,7 +35,39 @@ public class Client {
     {
 
           Client client = new Client(args[0], Integer.parseInt(args[1]));
-          client.buyListing("2", "1", "1");
+//          client.buyListing("2", "1", "1");
+            client.addListing("7", "7", 280);
+    }
+
+
+    private void addListing(String PId, String IId, double price) {
+
+        Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
+        if (initResult.getStatus()) {
+            String transactionId = initResult.getMessage();
+
+
+            Map<String, String> item = read(transactionId, "Items", "IId", IId);
+
+//             Check the owner
+            if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
+                log.info("item has a different owner!");
+                commit(transactionId);
+                return;
+            }
+
+            Map<String, String> player = read(transactionId, "Players", "PId", PId);
+
+//            Check player exists
+            if (player.isEmpty()) {
+                log.info("player does not exists!");
+                commit(transactionId);
+                return;
+            }
+
+            insert(transactionId, "Listings",  IId + "," + price);
+            commit(transactionId);
+        }
     }
 
     private void buyListing(String PId, String LId, String PPId) {
@@ -50,14 +82,27 @@ public class Client {
 
 //            Read from P where pid
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
+//            Check player exists
+            if (player.isEmpty()) {
+                log.info("player does not exists!");
+                commit(transactionId);
+                return;
+            }
 
 //            R from L where Lid
             Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
+//            Check player exists
+            if (listing.isEmpty()) {
+                log.info("listing does not exists!");
+                commit(transactionId);
+                return;
+            }
 
 //            Check players cash for listing
             if (Double.parseDouble( player.get("pcash")) < Double.parseDouble(listing.get("lprice"))){
                 log.info("player does not have enough cash");
-                Result commitResult = blockingStub.commitTransaction(TransactionId.newBuilder().setId(transactionId).build());
+                commit(transactionId);
+                return;
             }
 
 //          Delete From L where Lid
@@ -143,6 +188,30 @@ public class Client {
         return convertStringToMap(readResult.getMessage());
     }
 
+
+    private void insert(String transactionId, String tableName, String recordId, String newRecord) {
+        Data insertData = Data.newBuilder()
+                .setTransactionId(transactionId)
+                .setType(INSERT_TYPE)
+                .setKey(tableName)
+                .setValue(newRecord)
+                .setRecordId(recordId)
+                .build();
+        Result result = blockingStub.update(insertData);
+        log.info("insert data with id {} into {} status : {}", recordId, tableName, result.getStatus());
+    }
+
+    private void insert(String transactionId, String tableName, String newRecord) {
+        Data insertData = Data.newBuilder()
+                .setTransactionId(transactionId)
+                .setType(INSERT_TYPE)
+                .setKey(tableName)
+                .setValue(newRecord)
+                .build();
+        Result result = blockingStub.lockAndUpdate(insertData);
+        log.info("insert data with into {} status : {}", tableName, result.getStatus());
+    }
+
     private void lock(String transactionId, String tableName, String key, String value) {
         Data lockData = Data.newBuilder()
                 .setTransactionId(transactionId)
@@ -150,7 +219,7 @@ public class Client {
                 .setKey(tableName + "," + key + "," + value)
                 .build();
         Result lockResult = blockingStub.lock(lockData);
-        log.info("lock on {},{} status: {}", tableName, key, lockResult.getMessage());
+        log.info("lock on {},{} status: {}", tableName, key, lockResult.getStatus());
         if (locks.containsKey(transactionId)) {
             locks.get(transactionId).add(lockData.getKey());
         }
@@ -158,6 +227,17 @@ public class Client {
             locks.put(transactionId, new HashSet<>());
             locks.get(transactionId).add(lockData.getKey());
         }
+    }
+
+    private String insertLock(String transactionId, String tableName) {
+        Data lockData = Data.newBuilder()
+                .setTransactionId(transactionId)
+                .setType(INSERT_TYPE)
+                .setKey(tableName)
+                .build();
+        Result lockResult = blockingStub.lock(lockData);
+        log.info("lock on {} for insert status: {}", tableName, lockResult.getStatus());
+        return lockResult.getMessage();
     }
 
     public static Map<String, String> convertStringToMap(String str) {

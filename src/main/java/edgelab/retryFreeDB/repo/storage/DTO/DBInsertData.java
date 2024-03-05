@@ -6,5 +6,6 @@ import lombok.EqualsAndHashCode;
 @EqualsAndHashCode(callSuper = true)
 @Data
 public class DBInsertData extends DBData{
+    private String recordId;
     private String newRecord;
 }

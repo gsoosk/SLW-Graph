@@ -11,37 +11,36 @@ import edgelab.retryFreeDB.repo.storage.DTO.DBInsertData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBTransaction;
 import edgelab.retryFreeDB.repo.storage.DTO.DBWriteData;
 import edgelab.retryFreeDB.repo.storage.Postgres;
-import edgelab.retryFreeDB.repo.storage.Storage;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.io.filefilter.FalseFileFilter;
 
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 public class RetryFreeDBServer {
     private final Server server;
     private final int port;
-    public RetryFreeDBServer(int port, ServerBuilder<?> serverBuilder, String postgresPort) {
+    public RetryFreeDBServer(int port, ServerBuilder<?> serverBuilder, String postgresPort, String[] tables) throws SQLException {
         this.server = serverBuilder
                 .maxInboundMessageSize(Integer.MAX_VALUE)
-                .addService(new RetryFreeDBService(postgresPort))
+                .addService(new RetryFreeDBService(postgresPort, tables))
                 .build();
         this.port = port;
     }
 
-    public static void main(String[] args) throws IOException, InterruptedException {
+    public static void main(String[] args) throws IOException, InterruptedException, SQLException {
         int port = Integer.parseInt(args[0]);
         String postgresPort = args[1];
+        String[] tables = args[2].split(",");
 //      SERVER
-        RetryFreeDBServer server = new RetryFreeDBServer(port, ServerBuilder.forPort(port), postgresPort);
+        RetryFreeDBServer server = new RetryFreeDBServer(port, ServerBuilder.forPort(port), postgresPort, tables);
         server.start();
         server.blockUntilShutdown();
     }
@@ -63,12 +62,19 @@ public class RetryFreeDBServer {
         private final Postgres repo;
         Map<String, Connection> transactions;
         Map<String, Map<String, String>> toInsertIDS;
-        Map<String, String> lastIdUsed;
+        ConcurrentHashMap<String, Integer> lastIdUsed = new ConcurrentHashMap<>();
         private long lastTransactionId;
-        public RetryFreeDBService(String postgresPort) {
+        public RetryFreeDBService(String postgresPort, String[] tables) throws SQLException {
             repo = new Postgres(postgresPort);
             transactions = new HashMap<>();
             lastTransactionId = 0;
+
+            for (String table :
+                    tables) {
+                lastIdUsed.put(table, repo.lastId(table));
+            }
+            log.info("Table metadata initialization finished");
+
         }
 
         @Override
@@ -92,16 +98,29 @@ public class RetryFreeDBServer {
             }
         }
 
+        private DBData deserilizeDataToDBData(Data request) {
+            DBData d = DBTransaction.deserializeData(request);
+            if (d instanceof DBInsertData && ((DBInsertData) d).getRecordId().isEmpty()) {
+                lastIdUsed.put(d.getTable(), lastIdUsed.get(d.getTable()) + 1);
+                ((DBInsertData) d).setRecordId(lastIdUsed.get(d.getTable()).toString());
+            }
+            return d;
+        }
+
         @Override
         public void lock(Data request, StreamObserver<Result> responseObserver) {
             if (checkTransactionExists(request.getTransactionId(), responseObserver)) return;
 
             Connection conn = transactions.get(request.getTransactionId());
-            DBData d = DBTransaction.deserializeData(request);
+            DBData d = deserilizeDataToDBData(request);
+
             if (d != null) {
                 try {
                     repo.lock(conn, d);
-                    responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
+                    if (d instanceof DBInsertData)
+                        responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(((DBInsertData) d).getRecordId()).build());
+                    else
+                        responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
                     responseObserver.onCompleted();
                 } catch (SQLException e) {
                     responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not lock").build());
@@ -110,12 +129,15 @@ public class RetryFreeDBServer {
             }
 
         }
+
+
         @Override
         public void lockAndUpdate(Data request, StreamObserver<Result> responseObserver) {
             if (checkTransactionExists(request.getTransactionId(), responseObserver)) return;
 
             Connection conn = transactions.get(request.getTransactionId());
-            DBData d = DBTransaction.deserializeData(request);
+            DBData d = deserilizeDataToDBData(request);
+
             if (d != null) {
                 try {
                     repo.lock(conn, d);
@@ -138,7 +160,8 @@ public class RetryFreeDBServer {
             if (checkTransactionExists(request.getTransactionId(), responseObserver)) return;
 
             Connection conn = transactions.get(request.getTransactionId());
-            DBData d = DBTransaction.deserializeData(request);
+            DBData d = deserilizeDataToDBData(request);
+
             if (d != null) {
                 updateDBDataOnRepo(responseObserver, d, conn);
             }
