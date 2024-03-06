@@ -46,9 +46,15 @@ public class Client {
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
 
+            Map<String, String> listing = read(transactionId, "Listings", "LIId", IId);
+//            Check no listing exists with the item id
+            if (!listing.isEmpty()) {
+                log.info("listing exists");
+                commit(transactionId);
+                return;
+            }
 
             Map<String, String> item = read(transactionId, "Items", "IId", IId);
-
 //             Check the owner
             if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
                 log.info("item has a different owner!");
@@ -57,7 +63,6 @@ public class Client {
             }
 
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
-
 //            Check player exists
             if (player.isEmpty()) {
                 log.info("player does not exists!");
