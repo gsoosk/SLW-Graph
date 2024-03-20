@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -34,9 +35,11 @@ public class Client {
     public static void main(String args[])
     {
 
-          Client client = new Client(args[0], Integer.parseInt(args[1]));
-//          client.buyListing("2", "1", "1");
-            client.addListing("7", "7", 280);
+        Client client = new Client(args[0], Integer.parseInt(args[1]));
+//          client.buyListing("2", "1");
+          client.buyListingSLW("2", "1");
+//        client.addListing("7", "7", 280);
+//        client.addListingSLW("7", "7", 280);
     }
 
 
@@ -45,14 +48,14 @@ public class Client {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
-
-            Map<String, String> listing = read(transactionId, "Listings", "LIId", IId);
-//            Check no listing exists with the item id
-            if (!listing.isEmpty()) {
-                log.info("listing exists");
-                commit(transactionId);
-                return;
-            }
+//
+//            Map<String, String> listing = read(transactionId, "Listings", "LIId", IId);
+////            Check no listing exists with the item id
+//            if (!listing.isEmpty()) {
+//                log.info("listing exists");
+//                commit(transactionId);
+//                return;
+//            }
 
             Map<String, String> item = read(transactionId, "Items", "IId", IId);
 //             Check the owner
@@ -75,17 +78,22 @@ public class Client {
         }
     }
 
-    private void buyListing(String PId, String LId, String PPId) {
-
+    private void addListingSLW(String PId, String IId, double price) {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
-
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
 
-//            Lock P where PPid
-            lock(transactionId,"Players", "PId", PPId);
+            String listingRecordId = insertLock(transactionId, "Listings");
 
-//            Read from P where pid
+            Map<String, String> item = read(transactionId, "Items", "IId", IId);
+//             Check the owner
+            if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
+                log.info("item has a different owner!");
+                commit(transactionId);
+                return;
+            }
+
+
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
             if (player.isEmpty()) {
@@ -94,7 +102,20 @@ public class Client {
                 return;
             }
 
-//            R from L where Lid
+            insert(transactionId, "Listings",  IId + "," + price, listingRecordId);
+            commit(transactionId);
+        }
+
+    }
+
+    private void buyListing(String PId, String LId) {
+
+        Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
+
+        if (initResult.getStatus()) {
+            String transactionId = initResult.getMessage();
+
+        //            R from L where Lid
             Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
 //            Check player exists
             if (listing.isEmpty()) {
@@ -103,14 +124,44 @@ public class Client {
                 return;
             }
 
-//            Check players cash for listing
+            //            Read from P where pid
+            Map<String, String> player = read(transactionId, "Players", "PId", PId);
+//            Check player exists
+            if (player.isEmpty()) {
+                log.info("player does not exists!");
+                commit(transactionId);
+                return;
+            }
+
+            //            Check players cash for listing
             if (Double.parseDouble( player.get("pcash")) < Double.parseDouble(listing.get("lprice"))){
                 log.info("player does not have enough cash");
                 commit(transactionId);
                 return;
             }
 
-//          Delete From L where Lid
+
+//            Read from I where LIID
+            Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
+            //            Check item exists
+            if (item.isEmpty()) {
+                log.info("item does not exists!");
+                commit(transactionId);
+                return;
+            }
+
+
+//            R from P where ppid
+            String PPId =  item.get("iowner");
+            Map<String, String> prevOwner = read(transactionId, "Players", "PId", PPId);
+            //            Check prevOwner exists
+            if (prevOwner.isEmpty()) {
+                log.info("previous owner does not exists!");
+                commit(transactionId);
+                return;
+            }
+
+//            Delete from L where LID
             delete(transactionId, "Listings", "LId", LId);
 
 //          W into I where IId = Liid SET Iowner = pid
@@ -120,8 +171,86 @@ public class Client {
             String newCash = Double.toString(Double.parseDouble( player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
             write(transactionId, "Players", "PId", PId, "Pcash", newCash);
 
-//            R from P where ppid
+//           W into P where Pid SET pCash = new Cash
+            String prevOwnerNewCash = Double.toString(Double.parseDouble( prevOwner.get("pcash")) + Double.parseDouble(listing.get("lprice")));
+            write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash);
+
+//            Unlock
+            commit(transactionId);
+        }
+    }
+
+    private void buyListingSLW(String PId, String LId) {
+        Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
+
+        if (initResult.getStatus()) {
+            String transactionId = initResult.getMessage();
+            //            R from L where Lid
+            Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
+//            Check player exists
+            if (listing.isEmpty()) {
+                log.info("listing does not exists!");
+                commit(transactionId);
+                return;
+            }
+
+//            Read from I where LIID
+            Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
+            //            Check item exists
+            if (item.isEmpty()) {
+                log.info("item does not exists!");
+                commit(transactionId);
+                return;
+            }
+
+//            Lock Players where pid, ppid
+            String PPId =  item.get("iowner");
+            if (Integer.parseInt(PPId) > Integer.parseInt(PId)) {
+                lock(transactionId, "Players", "PId", PId);
+                lock(transactionId, "Players", "PId", PPId);
+            }
+            else {
+                lock(transactionId, "Players", "PId", PId);
+                lock(transactionId, "Players", "PId", PPId);
+            }
+
+            //            Read from P where pid
+            Map<String, String> player = read(transactionId, "Players", "PId", PId);
+//            Check player exists
+            if (player.isEmpty()) {
+                log.info("player does not exists!");
+                commit(transactionId);
+                return;
+            }
+
+            //            Check players cash for listing
+            if (Double.parseDouble( player.get("pcash")) < Double.parseDouble(listing.get("lprice"))){
+                log.info("player does not have enough cash");
+                commit(transactionId);
+                return;
+            }
+
+
             Map<String, String> prevOwner = read(transactionId, "Players", "PId", PPId);
+            //            Check prevOwner exists
+            if (prevOwner.isEmpty()) {
+                log.info("previous owner does not exists!");
+                commit(transactionId);
+                return;
+            }
+
+
+
+
+//            Delete from L where LID
+            delete(transactionId, "Listings", "LId", LId);
+
+//          W into I where IId = Liid SET Iowner = pid
+            write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId);
+
+//           W into P where Pid SET pCash = new Cash
+            String newCash = Double.toString(Double.parseDouble( player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
+            write(transactionId, "Players", "PId", PId, "Pcash", newCash);
 
 //           W into P where Pid SET pCash = new Cash
             String prevOwnerNewCash = Double.toString(Double.parseDouble( prevOwner.get("pcash")) + Double.parseDouble(listing.get("lprice")));
@@ -130,8 +259,6 @@ public class Client {
 //            Unlock
             commit(transactionId);
         }
-
-
     }
 
     private Map<String, Set<String>> locks = new HashMap<>();
@@ -194,7 +321,7 @@ public class Client {
     }
 
 
-    private void insert(String transactionId, String tableName, String recordId, String newRecord) {
+    private void insert(String transactionId, String tableName, String newRecord, String recordId) {
         Data insertData = Data.newBuilder()
                 .setTransactionId(transactionId)
                 .setType(INSERT_TYPE)
