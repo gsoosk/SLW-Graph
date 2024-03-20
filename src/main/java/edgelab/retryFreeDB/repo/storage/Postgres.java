@@ -237,7 +237,11 @@ public class Postgres implements Storage{
             String lockSQL = "SELECT * FROM " + data.getTable() + " WHERE " + data.getId() + " = ? FOR UPDATE";
             try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
                 updateStmt.setInt(1, data.getQuery());
-                updateStmt.executeQuery();
+                ResultSet rs = updateStmt.executeQuery();
+                if (!rs.next()) {
+                    log.info("no row with id found!");
+                    getAdvisoryLock(conn, data.getTable(), data.getQuery());
+                }
             } catch (SQLException ex) {
                 log.info("db error: couldn't lock,  {}", ex.getMessage());
                 throw ex;
@@ -245,16 +249,20 @@ public class Postgres implements Storage{
             log.info("Locks on rows acquired");
         }
         else {
-            String lockSQL = "SELECT pg_advisory_xact_lock(?)";
-            try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
-                updateStmt.setInt(1, Integer.parseInt(((DBInsertData) data).getRecordId()));
-                updateStmt.executeQuery();
-            } catch (SQLException ex) {
-                log.info("db error: couldn't lock,  {}", ex.getMessage());
-                throw ex;
-            }
-            log.info("Locks on id {} for insert acquired", ((DBInsertData) data).getRecordId());
+            getAdvisoryLock(conn, data.getTable(), Integer.parseInt (((DBInsertData) data).getRecordId()));
         }
+    }
+
+    private static void getAdvisoryLock(Connection conn, String tableName, Integer id) throws SQLException {
+        String lockSQL = "SELECT pg_advisory_xact_lock('" + tableName + "'::regclass::integer, ?)";
+        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+            updateStmt.setInt(1, id);
+            updateStmt.executeQuery();
+        } catch (SQLException ex) {
+            log.info("db error: couldn't lock,  {}", ex.getMessage());
+            throw ex;
+        }
+        log.info("Advisory lock on {},{} is acquired", tableName, id);
     }
 
 
