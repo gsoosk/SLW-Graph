@@ -281,6 +281,7 @@ public class Postgres implements Storage{
     }
 public void release(Connection conn) throws SQLException { try {
             conn.commit();
+            conn.close();
         } catch (SQLException e) {
             log.error("Could not release the locks: {}", e.getMessage());
             throw e;

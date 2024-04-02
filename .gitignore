@@ -1,6 +1,6 @@
 ./graph.png
 graph.png
-
+scripts/init.sql
 
 target/
 !.mvn/wrapper/maven-wrapper.jar
