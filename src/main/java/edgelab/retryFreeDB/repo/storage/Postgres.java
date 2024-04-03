@@ -231,7 +231,7 @@ public class Postgres implements Storage{
         log.info("Locks on rows acquired");
     }
     public void lock(Connection conn, DBData data) throws SQLException {
-        log.info("Acquiring lock for data");
+        log.info("Acquiring lock for data, {}:{}", data.getTable(), data.getId());
         if (!(data instanceof DBInsertData)) {
 //        FIXME: Risk of sql injection
             String lockSQL = "SELECT * FROM " + data.getTable() + " WHERE " + data.getId() + " = ? FOR UPDATE";
@@ -304,6 +304,7 @@ public void release(Connection conn) throws SQLException { try {
 
     public void update(Connection conn, DBWriteData data) throws SQLException {
         String SQL = "UPDATE " + data.getTable() + " SET  " + data.getVariable() + " = " + data.getValue() + " WHERE "+ data.getId() +" = ?";
+        log.info("update {}:{}", data.getTable(), data.getId());
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
             pstmt.setInt(1, data.getQuery());
@@ -318,6 +319,7 @@ public void release(Connection conn) throws SQLException { try {
     public String get(Connection conn, DBData data) throws SQLException {
         StringBuilder value = new StringBuilder();
         String SQL = "SELECT * FROM "+ data.getTable() +" WHERE "+data.getId()+" = ?";
+        log.info("get {}:{}", data.getTable(), data.getId());
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
             pstmt.setInt(1, data.getQuery());
@@ -338,7 +340,7 @@ public void release(Connection conn) throws SQLException { try {
             }
 
         } catch (SQLException ex) {
-            log.info("could not read: {}", ex.getMessage());
+            log.error("could not read: {}", ex.getMessage());
             throw ex;
         }
 
@@ -348,6 +350,7 @@ public void release(Connection conn) throws SQLException { try {
 
     public void insert(Connection conn, DBInsertData data) throws SQLException {
         String SQL = "INSERT INTO " + data.getTable() + " VALUES  (" + data.getRecordId() + "," + data.getNewRecord() + ")";
+        log.info("insert {}:{}", data.getTable(), data.getRecordId());
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
             pstmt.executeUpdate();

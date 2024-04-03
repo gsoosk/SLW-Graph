@@ -22,6 +22,7 @@ import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 public class RetryFreeDBServer {
@@ -60,14 +61,13 @@ public class RetryFreeDBServer {
     @Slf4j
     public static class RetryFreeDBService extends RetryFreeDBServerGrpc.RetryFreeDBServerImplBase {
         private final Postgres repo;
-        Map<String, Connection> transactions;
-        Map<String, Map<String, String>> toInsertIDS;
+        ConcurrentHashMap<String, Connection> transactions;
         ConcurrentHashMap<String, Integer> lastIdUsed = new ConcurrentHashMap<>();
-        private long lastTransactionId;
+        private final AtomicLong lastTransactionId;
         public RetryFreeDBService(String postgresPort, String[] tables) throws SQLException {
             repo = new Postgres(postgresPort);
-            transactions = new HashMap<>();
-            lastTransactionId = 0;
+            transactions = new ConcurrentHashMap<>();
+            lastTransactionId =  new AtomicLong(0);
 
             for (String table :
                     tables) {
@@ -82,12 +82,12 @@ public class RetryFreeDBServer {
             try  {
                 Connection conn = repo.connect();
                 conn.setAutoCommit(false);
-                transactions.put(Long.toString(lastTransactionId), conn);
+                long transactionId = lastTransactionId.incrementAndGet();
+                transactions.put(Long.toString(transactionId), conn);
                 responseObserver.onNext(Result.newBuilder()
                                         .setStatus(true)
-                                        .setMessage(Long.toString(lastTransactionId)).build());
+                                        .setMessage(Long.toString(transactionId)).build());
                 responseObserver.onCompleted();
-                lastTransactionId++;
             }
             catch (SQLException ex) {
                 log.info("db error: couldn't connect/commit,  {}", ex.getMessage());
