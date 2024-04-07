@@ -19,9 +19,10 @@ import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.MutuallyExclusiveGroup;
 import net.sourceforge.argparse4j.inf.Namespace;
-import org.apache.logging.log4j.core.Logger;
 
+import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.net.MalformedURLException;
@@ -36,8 +37,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.stream.Collectors;
 
 import static net.sourceforge.argparse4j.impl.Arguments.store;
 import static net.sourceforge.argparse4j.impl.Arguments.append;
@@ -49,7 +53,9 @@ public class Performance {
     private class ServerRequest {
         enum Type {
             BUY,
-            SELL
+            SELL,
+            BUY_HOT,
+            SELL_HOT
         }
         @Getter
         private long transactionId;
@@ -142,6 +148,52 @@ public class Performance {
     private ThreadPoolExecutor executor;
     private Client client;
     private long txId = 0;
+    private Map<String, List<String>> hotPlayersAndItems;
+    private Map<String, List<String>> hotListings;
+    private int HOT_RECORD_SELECTION_CHANCE = 100;
+    private int NUM_OF_PLAYERS = 500000;
+    private int NUM_OF_LILSTINGS = 100000;
+    private int buy_or_sell = 0;
+    private Random random = new Random(1234);
+    private static Map<String, List<String>> readHotPlayerRecords(String filePath) {
+        Map<String, List<String>> map = new ConcurrentHashMap<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String[] parts = line.split(","); // Change "," to your actual delimiter
+                if (parts.length >= 2) {
+                    String key = parts[1].trim(); // Second column as key
+                    String value = parts[0].trim(); // First column as value
+
+                    // Check if the key exists and add the value to its list
+                    map.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return map;
+    }
+
+
+    private static Map<String, List<String>> readHotListingRecords(String filePath) {
+        Map<String, List<String>> records = new ConcurrentHashMap<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String[] parts = line.split(",");
+                if (parts.length == 3) {
+                    String firstColumn = parts[0].trim();
+                    String secondColumn = parts[1].trim();
+                    String thirdColumn = parts[2].trim();
+                    records.put(firstColumn, List.of( secondColumn, thirdColumn));
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return records;
+    }
 
     void start() throws Exception {
         /* parse args */
@@ -198,16 +250,14 @@ public class Performance {
                 .withPort(9002)
                 .build();
 
+        hotPlayersAndItems = readHotPlayerRecords("scripts/hot_records_16_items");
+        hotListings = readHotListingRecords("scripts/hot_records_16_listings");
+
 //        connectToDataStore(address, port);
 
         Stats stats = new Stats(numRecords, 1000, resultFilePath, metricsFilePath, recordSize, 0, 0.0, 0, 20000);
         long startMs = System.currentTimeMillis();
 
-        ThroughputThrottler throttler = new ThroughputThrottler(throughput, startMs);
-//        if (memoryTrigger) {
-//            datastore.changeMemory(Size.newBuilder().setValue(dynamicMemory.get(currentMemoryIndex)).build());
-//            stats.changeMemory(dynamicMemory.get(currentMemoryIndex));
-//        }
 
         log.info("Running benchmark for partition: " + partitionId);
 
@@ -239,9 +289,7 @@ public class Performance {
 
 
 
-            if (throttler.shouldThrottle(i, sendStartMs)) {
-                throttler.throttle();
-            }
+
         }
         // wait for retries to be done
 //        Thread.sleep(timeout * 3L);
@@ -256,23 +304,85 @@ public class Performance {
 
     private ServerRequest getNextRequest() {
 //        TODO: Change to correct tx selection
-        long sendStartMs = System.currentTimeMillis();
-        Map<String, String> tx = new HashMap<>();
-        Random rand = new Random();
-        tx.put("PId", Integer.toString(rand.nextInt(1, 500000)));
-        tx.put("LId", Integer.toString(rand.nextInt(1, 100000)));
-        return new ServerRequest(ServerRequest.Type.BUY, txId++, tx , sendStartMs);
+
+        int chance = random.nextInt(100); // Generates a random number between 0 (inclusive) and 100 (exclusive)
+        buy_or_sell++;
+        if (chance < HOT_RECORD_SELECTION_CHANCE) {
+            List<String> playersAsList = new ArrayList<>(hotPlayersAndItems.keySet());
+            if (buy_or_sell % 2 == 0) {
+
+                Map<String, String> tx = new HashMap<>();
+                String randomPlayer = playersAsList.get(random.nextInt(playersAsList.size()));
+
+                List<String> listingsAsList = new ArrayList<>(hotListings.keySet());
+                String randomListing = listingsAsList.get(random.nextInt(listingsAsList.size()));
+                // Get the list associated with this random key
+//                List<String> randomValues = hotPlayersAndItems.get(randomKey);
+                tx.put("PId", randomPlayer);
+                tx.put("LId", randomListing);
+                long sendStartMs = System.currentTimeMillis();
+                return new ServerRequest(ServerRequest.Type.BUY_HOT, txId++, tx , sendStartMs);
+            } else {
+                Map<String, String> tx = new HashMap<>();
+                playersAsList.removeIf(record -> hotPlayersAndItems.get(record).isEmpty());
+                String randomPlayer = playersAsList.get(random.nextInt(playersAsList.size()));
+
+                List<String> randomValues = hotPlayersAndItems.get(randomPlayer);
+                String randomItem = randomValues.get(random.nextInt(randomValues.size()));
+
+                tx.put("PId", randomPlayer);
+                tx.put("IId", randomItem);
+                long sendStartMs = System.currentTimeMillis();
+                return new ServerRequest(ServerRequest.Type.SELL_HOT, txId++, tx , sendStartMs);
+            }
+        } else {
+            Map<String, String> tx = new HashMap<>();
+            if (buy_or_sell % 2 == 0) {
+                tx.put("PId", Integer.toString(random.nextInt(1, NUM_OF_PLAYERS)));
+                tx.put("LId", Integer.toString(random.nextInt(1, NUM_OF_LILSTINGS)));
+                long sendStartMs = System.currentTimeMillis();
+                return new ServerRequest(ServerRequest.Type.BUY, txId++, tx , sendStartMs);
+            } else {
+                String randomPlayer =  Integer.toString(random.nextInt(1, NUM_OF_PLAYERS));
+                String randomItem = Integer.toString(random.nextInt(1, NUM_OF_PLAYERS * 5));
+                tx.put("PId", randomPlayer);
+                tx.put("IId", randomItem);
+                long sendStartMs = System.currentTimeMillis();
+                return new ServerRequest(ServerRequest.Type.SELL, txId++, tx , sendStartMs);
+            }
+        }
+
+
+
     }
 
     private void executeRequestFromThreadPool(ServerRequest request, Stats stats) {
 
         stats.nextAdded(1);
-        executor.submit(() -> {
+        Future<Void> future = executor.submit(() -> {
+            log.debug("sent");
             if (request.getType() == ServerRequest.Type.BUY) {
                 client.buyListingSLW(request.getValues().get("PId"), request.getValues().get("LId"));
             }
             else if (request.getType() == ServerRequest.Type.SELL) {
                 client.addListingSLW(request.getValues().get("PId"), request.getValues().get("IId"), 1);
+            }
+            else if (request.getType() == ServerRequest.Type.BUY_HOT) {
+                String newItem = client.buyListingSLW(request.getValues().get("PId"), request.getValues().get("LId"));
+                if (newItem != null) {
+                    List<String> items = new ArrayList<>(hotPlayersAndItems.get(request.getValues().get("PId")).stream().toList());
+                    items.add(newItem);
+                    hotPlayersAndItems.put(request.getValues().get("PId"), items);
+                }
+            }
+            else if (request.getType() == ServerRequest.Type.SELL_HOT) {
+                String newListing = client.addListingSLW(request.getValues().get("PId"), request.getValues().get("IId"), 1);
+                if (newListing != null) {
+                    List<String> items = new ArrayList<>(hotPlayersAndItems.get(request.getValues().get("PId")).stream().toList());
+                    items.removeIf(record -> record.equals(request.getValues().get("IId")));
+                    hotPlayersAndItems.put(request.getValues().get("PId"), items);
+                    hotListings.put(newListing, List.of(request.getValues().get("IId"), "1"));
+                }
             }
             stats.nextCompletion(request.start, 1);
             return null;
@@ -280,6 +390,7 @@ public class Performance {
 
         while (executor.getQueue().size() >= MAX_QUEUE_SIZE) {
             try {
+                log.debug("sleep");
                 Thread.sleep(1);
             } catch (InterruptedException e) {
                 e.printStackTrace();
