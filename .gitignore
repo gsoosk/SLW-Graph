@@ -1,6 +1,8 @@
 ./graph.png
 graph.png
 scripts/init.sql
+scripts/test.db
+scripts/hot_records*
 
 target/
 !.mvn/wrapper/maven-wrapper.jar
