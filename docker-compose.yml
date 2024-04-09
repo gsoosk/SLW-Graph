@@ -3,7 +3,7 @@ version: '3.5'
 services:
   postgres0_service:
     container_name: postgres0_service
-    image: postgres
+    image: postgres_slw:init
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
@@ -11,10 +11,25 @@ services:
       PGDATA: /data/postgres
     volumes:
       - postgres0:/data/postgres
-      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+#      - ../scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "127.0.0.1:5432:5432"
     restart: unless-stopped
+#
+#  postgres0_service:
+#    container_name: postgres0_service
+#    image: postgres
+#    environment:
+#      POSTGRES_USER: user
+#      POSTGRES_PASSWORD: password
+#      POSTGRES_DB: postgres
+#      PGDATA: /data/postgres
+#    volumes:
+#      - postgres0:/data/postgres
+#      - ../scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+#    ports:
+#      - "127.0.0.1:5432:5432"
+#    restart: unless-stopped
 
 #  postgres1_service:
 #    container_name: postgres1_service
