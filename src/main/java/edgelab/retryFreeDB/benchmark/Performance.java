@@ -37,6 +37,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -121,7 +122,6 @@ public class Performance {
         perf.parseArguments(args);
         perf.start();
 
-
     }
 
     private void parseArguments(String[] args) throws ArgumentParserException {
@@ -143,20 +143,21 @@ public class Performance {
     private int port;
 
 //    Multi-threading
-    private final int MAX_THREADS = 8;
-    private final int MAX_QUEUE_SIZE = 16;
+    private int MAX_THREADS = 4;
+    private final int MAX_QUEUE_SIZE = 2;
     private ThreadPoolExecutor executor;
     private Client client;
     private long txId = 0;
-    private Map<String, List<String>> hotPlayersAndItems;
-    private Map<String, List<String>> hotListings;
-    private int HOT_RECORD_SELECTION_CHANCE = 100;
+    private Map<String, Set<String>> hotPlayersAndItems; // Player:{items}
+    private Map<String, List<String>> hotListings; // Listing: <iid, price>
+    private int HOT_RECORD_SELECTION_CHANCE = 80;
     private int NUM_OF_PLAYERS = 500000;
     private int NUM_OF_LILSTINGS = 100000;
-    private int buy_or_sell = 0;
+    private int buy_or_sell = 1;
+    private int buy_or_sell_hot = 1;
     private Random random = new Random(1234);
-    private static Map<String, List<String>> readHotPlayerRecords(String filePath) {
-        Map<String, List<String>> map = new ConcurrentHashMap<>();
+    private static Map<String, Set<String>> readHotPlayerRecords(String filePath) {
+        Map<String, Set<String>> map = new ConcurrentHashMap<>();
         try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
             String line;
             while ((line = reader.readLine()) != null) {
@@ -166,7 +167,7 @@ public class Performance {
                     String value = parts[0].trim(); // First column as value
 
                     // Check if the key exists and add the value to its list
-                    map.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
+                    map.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(value);
                 }
             }
         } catch (IOException e) {
@@ -230,7 +231,7 @@ public class Performance {
         numRecords += warmup;
         int throughput = res.getInt("throughput");
         String payloadFilePath = res.getString("payloadFile");
-        String resultFilePath = res.getString("resultFile") == null ? "result.csv" : res.getString("resultFile") ;
+        String resultFilePath = res.getString("resultFile") == null ? "./result/result.csv" : res.getString("resultFile") ;
         String metricsFilePath = res.getString("metricsFile") == null ? "metrics.csv" : res.getString("metricsFile") ;
         String partitionId = res.getString("partitionId");
         // since default value gets printed with the help text, we are escaping \n there and replacing it with correct value here.
@@ -250,13 +251,20 @@ public class Performance {
                 .withPort(9002)
                 .build();
 
-        hotPlayersAndItems = readHotPlayerRecords("scripts/hot_records_16_items");
-        hotListings = readHotListingRecords("scripts/hot_records_16_listings");
+
+        hotPlayersAndItems = readHotPlayerRecords(res.getString("hotPlayers"));
+        hotListings = readHotListingRecords(res.getString("hotListings"));
+        this.HOT_RECORD_SELECTION_CHANCE = res.getInt("hotSelectionProb");
+
+        if (res.getInt("maxThreads") != null)
+            this.MAX_THREADS = res.getInt("maxThreads");
 
 //        connectToDataStore(address, port);
 
-        Stats stats = new Stats(numRecords, 1000, resultFilePath, metricsFilePath, recordSize, 0, 0.0, 0, 20000);
+
         long startMs = System.currentTimeMillis();
+        warmup = 5;
+        benchmarkTime += warmup;
 
 
         log.info("Running benchmark for partition: " + partitionId);
@@ -271,18 +279,24 @@ public class Performance {
 
 //            TODO: Refactor this function
         long startToWaitTime = System.currentTimeMillis();
+        Stats stats = null;
         for (long i = 0; i < numRecords; i++) {
 
-            long sendStartMs = System.currentTimeMillis();
-            stats.report(sendStartMs);
-            ServerRequest request = getNextRequest();
 
+            long sendStartMs = System.currentTimeMillis();
+            long timeElapsed = (sendStartMs - sendingStart) / 1000;
+
+            if (stats == null && timeElapsed > warmup)
+                stats = new Stats(numRecords, 1000, resultFilePath, metricsFilePath, recordSize, 0, 0.0, 0, 20000, res.getString("hotPlayers"), HOT_RECORD_SELECTION_CHANCE, MAX_THREADS);
+            if (timeElapsed > warmup)
+                stats.report(sendStartMs);
+
+            ServerRequest request = getNextRequest();
             executeRequestFromThreadPool(request, stats);
 //            sendRequestAsync(stats, recordSize, request, c, warmup, maxRetry, timeout, partitionId);
 
 
             if (benchmarkTime != null) {
-                long timeElapsed = (sendStartMs - sendingStart) / 1000;
                 if (timeElapsed >= benchmarkTime)
                     break;
             }
@@ -300,6 +314,8 @@ public class Performance {
         stats.printTotal();
         metricServer.close();
 
+        executor.shutdownNow();
+
     }
 
     private ServerRequest getNextRequest() {
@@ -308,9 +324,12 @@ public class Performance {
         int chance = random.nextInt(100); // Generates a random number between 0 (inclusive) and 100 (exclusive)
         buy_or_sell++;
         if (chance < HOT_RECORD_SELECTION_CHANCE) {
+            buy_or_sell_hot++;
+            if (hotListings.isEmpty())
+                buy_or_sell_hot = 1;
             List<String> playersAsList = new ArrayList<>(hotPlayersAndItems.keySet());
-            if (buy_or_sell % 2 == 0) {
-
+            if (buy_or_sell_hot % 2 == 0) {
+                //buy
                 Map<String, String> tx = new HashMap<>();
                 String randomPlayer = playersAsList.get(random.nextInt(playersAsList.size()));
 
@@ -320,18 +339,23 @@ public class Performance {
 //                List<String> randomValues = hotPlayersAndItems.get(randomKey);
                 tx.put("PId", randomPlayer);
                 tx.put("LId", randomListing);
+                tx.put("IId", hotListings.get(randomListing).get(0));
+                tx.put("price", hotListings.get(randomListing).get(1));
+                hotListings.remove(randomListing);
                 long sendStartMs = System.currentTimeMillis();
                 return new ServerRequest(ServerRequest.Type.BUY_HOT, txId++, tx , sendStartMs);
             } else {
+                //sell
                 Map<String, String> tx = new HashMap<>();
                 playersAsList.removeIf(record -> hotPlayersAndItems.get(record).isEmpty());
                 String randomPlayer = playersAsList.get(random.nextInt(playersAsList.size()));
 
-                List<String> randomValues = hotPlayersAndItems.get(randomPlayer);
+                List<String> randomValues = new ArrayList<>(hotPlayersAndItems.get(randomPlayer));
                 String randomItem = randomValues.get(random.nextInt(randomValues.size()));
 
                 tx.put("PId", randomPlayer);
                 tx.put("IId", randomItem);
+                hotPlayersAndItems.get(randomPlayer).remove(randomItem);
                 long sendStartMs = System.currentTimeMillis();
                 return new ServerRequest(ServerRequest.Type.SELL_HOT, txId++, tx , sendStartMs);
             }
@@ -358,7 +382,8 @@ public class Performance {
 
     private void executeRequestFromThreadPool(ServerRequest request, Stats stats) {
 
-        stats.nextAdded(1);
+        if (stats != null)
+            stats.nextAdded(1);
         Future<Void> future = executor.submit(() -> {
             log.debug("sent");
             if (request.getType() == ServerRequest.Type.BUY) {
@@ -370,24 +395,25 @@ public class Performance {
             else if (request.getType() == ServerRequest.Type.BUY_HOT) {
                 String newItem = client.buyListingSLW(request.getValues().get("PId"), request.getValues().get("LId"));
                 if (newItem != null) {
-                    List<String> items = new ArrayList<>(hotPlayersAndItems.get(request.getValues().get("PId")).stream().toList());
-                    items.add(newItem);
-                    hotPlayersAndItems.put(request.getValues().get("PId"), items);
+                    hotPlayersAndItems.get(request.getValues().get("PId")).add(newItem);
+                }
+                else {
+                    hotListings.put(request.getValues().get("LId"), List.of(request.getValues().get("IId"), request.getValues().get("price")));
                 }
             }
             else if (request.getType() == ServerRequest.Type.SELL_HOT) {
                 String newListing = client.addListingSLW(request.getValues().get("PId"), request.getValues().get("IId"), 1);
                 if (newListing != null) {
-                    List<String> items = new ArrayList<>(hotPlayersAndItems.get(request.getValues().get("PId")).stream().toList());
-                    items.removeIf(record -> record.equals(request.getValues().get("IId")));
-                    hotPlayersAndItems.put(request.getValues().get("PId"), items);
                     hotListings.put(newListing, List.of(request.getValues().get("IId"), "1"));
                 }
+                else {
+                    hotPlayersAndItems.get(request.getValues().get("PId")).add(request.getValues().get("IId"));
+                }
             }
-            stats.nextCompletion(request.start, 1);
+            if (stats != null)
+                stats.nextCompletion(request.start, 1);
             return null;
         });
-
         while (executor.getQueue().size() >= MAX_QUEUE_SIZE) {
             try {
                 log.debug("sleep");
@@ -689,6 +715,44 @@ public class Performance {
                 .help("time of memory trigger");
 
 
+        parser.addArgument("--hot-players")
+                .action(store())
+                .required(true)
+                .type(String.class)
+                .dest("hotPlayers")
+                .metavar("HOTPLAYERS")
+                .help("path to hot players");
+
+
+
+        parser.addArgument("--hot-listings")
+                .action(store())
+                .required(true)
+                .type(String.class)
+                .dest("hotListings")
+                .metavar("HOTLISTING")
+                .help("path to hot listings");
+
+
+        parser.addArgument("--hot-selection-prob")
+                .action(store())
+                .required(true)
+                .type(Integer.class)
+                .dest("hotSelectionProb")
+                .metavar("HOTSELECTION")
+                .help("chance of a hot record being selected");
+
+
+        parser.addArgument("--max-threads")
+                .action(store())
+                .required(false)
+                .type(Integer.class)
+                .dest("maxThreads")
+                .metavar("MAXTHREADS")
+                .help("number of maximum threads for sending the load");
+
+
+
         return parser;
     }
 
@@ -725,6 +789,10 @@ public class Performance {
         private int started;
         private int startedBytes;
         private int startedWindowBytes;
+        private String hotRecords;
+        private int hotChance;
+
+        private int threads;
 
         // Metrics
         private static final Summary finishedRequestsBytes = Summary.build()
@@ -771,7 +839,7 @@ public class Performance {
                 .help("Memory usage of database")
                 .register();
 
-        public Stats(long numRecords, int reportingInterval, String resultFilePath, String metricsFilePath, int recordSize, int batchSize, Double interval, int timeout, long memory) {
+        public Stats(long numRecords, int reportingInterval, String resultFilePath, String metricsFilePath, int recordSize, int batchSize, Double interval, int timeout, long memory, String hotRecords, int hotChance, int threads) {
             this.start = System.currentTimeMillis();
             this.windowStart = System.currentTimeMillis();
             this.iteration = 0;
@@ -805,38 +873,32 @@ public class Performance {
             timeoutGauge.set(timeout);
             memoryGauge.set(memory);
             this.retries = new HashMap<>();
-            createResultCSVFiles(resultFilePath, metricsFilePath);
+            this.hotRecords = hotRecords;
+            this.hotChance = hotChance;
+            this.threads = threads;
+            createResultCSVFiles(resultFilePath);
         }
 
-        private void createResultCSVFiles(String resultFilePath, String metricFilePath) {
-            if (!Files.exists(Paths.get(resultFilePath))){
-                String CSVHeader = "num of records, record size, interval, timeout, batch size, throughput, goodput, average latency, max latency, 50th latency, 95th latency, requests retried, retries, completed retries\n";
-                try {
-                    BufferedWriter out = new BufferedWriter(
-                            new FileWriter(resultFilePath, true));
+        private void createResultCSVFiles(String resultFilePath) {
+            try {
+                Path path = Paths.get(resultFilePath);
+                // Ensure the parent directories exist
+                Files.createDirectories(path.getParent());
 
-                    // Writing on output stream
+                // Check if the file already exists to avoid overwriting it
+                if (!Files.exists(path)) {
+                    String CSVHeader = "num of records, hot_records, prob, threads, throughput(tx/s)\n";
+                    BufferedWriter out = new BufferedWriter(new FileWriter(resultFilePath));
+
+                    // Writing the header to output stream
                     out.write(CSVHeader);
-                    // Closing the connection
+
+                    // Closing the stream
                     out.close();
                 }
-                catch (IOException ex) {
-                    log.warn("Invalid path");
-                }
-            }
-
-            String CSVHeader = "num of records, record size, interval, timeout, batch size, throughput, goodput, average latency, max latency, requests retried, retries, completed retries\n";
-            try {
-                BufferedWriter out = new BufferedWriter(
-                        new FileWriter(metricFilePath, false));
-
-                // Writing on output stream
-                out.write(CSVHeader);
-                // Closing the connection
-                out.close();
-            }
-            catch (IOException ex) {
-                log.warn("Invalid path");
+            } catch (IOException ex) {
+                System.out.println(ex.getMessage());
+                log.warn("Invalid path or error creating the directories");
             }
         }
 
@@ -907,34 +969,6 @@ public class Performance {
                     windowTotalLatency / (double) windowCount,
                     (double) windowMaxLatency);
 
-
-
-            String resultCSV = String.format("%d,%d,%.1f,%d,%d,%.3f,%.3f,%.2f,%.2f,%d,%d,%d\n",
-                    count,
-                    recordSize,
-                    interval,
-                    timeout,
-                    batchSize,
-                    throughputMbPerSec,
-                    mbPerSec,
-                    windowTotalLatency / (double) windowCount,
-                    (double) maxLatency,
-                    retries.size() - previousWindowRetries,
-                    retries.values().stream().mapToInt(Integer::intValue).sum() - previousWindowRequestRetried,
-                    completedRetries - previousWindowCompletedRetries);
-
-            try {
-                BufferedWriter out = new BufferedWriter(
-                        new FileWriter(metricsFilePath, true));
-
-                // Writing on output stream
-                out.write(resultCSV);
-                // Closing the connection
-                out.close();
-            }
-            catch (IOException ex) {
-                log.warn("Invalid path");
-            }
         }
 
         public void newWindow() {
@@ -968,22 +1002,13 @@ public class Performance {
                     percs[3],
                     retries.size(),
                     retries.values().stream().mapToInt(Integer::intValue).sum());
-
-            String resultCSV = String.format("%d,%d,%f,%d,%d,%.3f,%.3f,%.2f,%.2f,%d,%d,%d,%d,%d\n",
+            String CSVHeader = "num of records, hot_records, prob, threads, throughput(tx/s)\n";
+            String resultCSV = String.format("%d,%s,%d,%d,%.2f\n",
                     count,
-                    recordSize,
-                    interval,
-                    timeout,
-                    batchSize,
-                    throughputMbPerSec,
-                    mbPerSec,
-                    totalLatency / (double) count,
-                    (double) maxLatency,
-                    percs[0],
-                    percs[1],
-                    retries.size(),
-                    retries.values().stream().mapToInt(Integer::intValue).sum(),
-                    completedRetries);
+                    hotRecords,
+                    hotChance,
+                    threads,
+                    recsPerSec);
             try {
                 BufferedWriter out = new BufferedWriter(
                         new FileWriter(resultFilePath, true));

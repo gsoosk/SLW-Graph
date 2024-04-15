@@ -240,74 +240,55 @@
 
 
 
-      <!--        Jar build -->
-<!--      <plugin>-->
-<!--        <groupId>org.apache.maven.plugins</groupId>-->
-<!--        <artifactId>maven-shade-plugin</artifactId>-->
-<!--        <executions>-->
-<!--          <execution>-->
-<!--            <id>1</id>-->
-<!--            <goals>-->
-<!--              <goal>shade</goal>-->
-<!--            </goals>-->
-<!--            <configuration>-->
-<!--              <shadedArtifactAttached>true</shadedArtifactAttached>-->
-<!--              <finalName>RocksDBBenchmark</finalName>-->
-<!--              <transformers>-->
-<!--                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer">-->
+<!--              Jar build-->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>1</id>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <finalName>Client</finalName>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer">
 
-<!--                </transformer>-->
-<!--                <transformer implementation=-->
-<!--                                     "org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">-->
-<!--                  <mainClass>com.edgelab.compaction.benchmark.Performance</mainClass>-->
-<!--                </transformer>-->
-<!--              </transformers>-->
-<!--            </configuration>-->
-<!--          </execution>-->
-
-
-<!--          <execution>-->
-<!--            <id>2</id>-->
-<!--            <goals>-->
-<!--              <goal>shade</goal>-->
-<!--            </goals>-->
-<!--            <configuration>-->
-<!--              <shadedArtifactAttached>true</shadedArtifactAttached>-->
-<!--              <finalName>RocksDBCheckpointInitializer</finalName>-->
-<!--              <transformers>-->
-<!--                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer">-->
-
-<!--                </transformer>-->
-<!--                <transformer implementation=-->
-<!--                                     "org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">-->
-<!--                  <mainClass>com.edgelab.compaction.CheckPointInitializer</mainClass>-->
-<!--                </transformer>-->
-<!--              </transformers>-->
-<!--            </configuration>-->
-<!--          </execution>-->
+                </transformer>
+                <transformer implementation=
+                                     "org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>edgelab.retryFreeDB.benchmark.Performance</mainClass>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
 
 
-<!--          <execution>-->
-<!--            <id>3</id>-->
-<!--            <goals>-->
-<!--              <goal>shade</goal>-->
-<!--            </goals>-->
-<!--            <configuration>-->
-<!--              <shadedArtifactAttached>true</shadedArtifactAttached>-->
-<!--              <finalName>RocksDBServer</finalName>-->
-<!--              <transformers>-->
-<!--                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer">-->
+          <execution>
+            <id>2</id>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <finalName>Server</finalName>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer">
 
-<!--                </transformer>-->
-<!--                <transformer implementation=-->
-<!--                                     "org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">-->
-<!--                  <mainClass>com.edgelab.compaction.rocksdb.RocksDBServer</mainClass>-->
-<!--                </transformer>-->
-<!--              </transformers>-->
-<!--            </configuration>-->
-<!--          </execution>-->
-<!--        </executions>-->
-<!--      </plugin>-->
+                </transformer>
+                <transformer implementation=
+                                     "org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>edgelab.retryFreeDB.RetryFreeDBServer</mainClass>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
+
+
+        </executions>
+      </plugin>
     </plugins>
     <!--    </pluginManagement>-->
   </build>

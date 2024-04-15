@@ -24,12 +24,15 @@ public class Postgres implements Storage{
     private static final String user = "user";
     private static final String password = "password";
 
+    private static final long LOCK_THINKING_TIME = 5;
+    private static final long OPERATION_THINKING_TIME = 5;
+
 
 
     private String partitionId;
 
-    public Postgres(String port) {
-        url = "jdbc:postgresql://localhost:" + port + "/postgres";
+    public Postgres(String addr, String port) {
+        url = "jdbc:postgresql://" + addr + ":" + port + "/postgres";
     }
 
 
@@ -230,8 +233,8 @@ public class Postgres implements Storage{
         }
         log.info("Locks on rows acquired");
     }
-    public void lock(Connection conn, DBData data) throws SQLException {
-        log.info("Acquiring lock for data, {}:{}", data.getTable(), data.getId());
+    public void lock(String tx, Connection conn, DBData data) throws SQLException {
+        log.warn("{}, Acquiring lock for data, {}:<{},{}>",tx, data.getTable(), data.getId(), data.getQuery());
         if (!(data instanceof DBInsertData)) {
 //        FIXME: Risk of sql injection
             String lockSQL = "SELECT * FROM " + data.getTable() + " WHERE " + data.getId() + " = ? FOR UPDATE";
@@ -242,14 +245,24 @@ public class Postgres implements Storage{
                     log.info("no row with id found!");
                     getAdvisoryLock(conn, data.getTable(), data.getQuery());
                 }
+
+                delay(LOCK_THINKING_TIME);
             } catch (SQLException ex) {
                 log.info("db error: couldn't lock,  {}", ex.getMessage());
                 throw ex;
             }
-            log.info("Locks on rows acquired");
+            log.warn("{}, Locks on rows acquired, {}:<{},{}>",tx, data.getTable(), data.getId(), data.getQuery());
         }
         else {
             getAdvisoryLock(conn, data.getTable(), Integer.parseInt (((DBInsertData) data).getRecordId()));
+        }
+    }
+
+    private void delay(long duration) {
+        try {
+            Thread.sleep(duration);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         }
     }
 
@@ -295,7 +308,7 @@ public void release(Connection conn) throws SQLException { try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
             pstmt.setInt(1, data.getQuery());
             pstmt.executeUpdate();
-
+            delay(OPERATION_THINKING_TIME);
         } catch (SQLException e) {
             log.error("Could not remove the data: {}", e.getMessage());
             throw e;
@@ -304,11 +317,12 @@ public void release(Connection conn) throws SQLException { try {
 
     public void update(Connection conn, DBWriteData data) throws SQLException {
         String SQL = "UPDATE " + data.getTable() + " SET  " + data.getVariable() + " = " + data.getValue() + " WHERE "+ data.getId() +" = ?";
-        log.info("update {}:{}", data.getTable(), data.getId());
+        log.info("update {}:<{}, {}>", data.getTable(), data.getId(), data.getQuery());
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
             pstmt.setInt(1, data.getQuery());
             pstmt.executeUpdate();
+            delay(OPERATION_THINKING_TIME);
         } catch (SQLException e) {
             log.error("Could not write the data: {}", e.getMessage());
             throw e;
@@ -338,7 +352,7 @@ public void release(Connection conn) throws SQLException { try {
                         value.append(",");
                 }
             }
-
+            delay(OPERATION_THINKING_TIME);
         } catch (SQLException ex) {
             log.error("could not read: {}", ex.getMessage());
             throw ex;
@@ -354,6 +368,7 @@ public void release(Connection conn) throws SQLException { try {
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
             pstmt.executeUpdate();
+            delay(OPERATION_THINKING_TIME);
         } catch (SQLException e) {
             log.error("Could not insert the data: {}", e.getMessage());
             throw e;

@@ -22,26 +22,28 @@ import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 public class RetryFreeDBServer {
     private final Server server;
     private final int port;
-    public RetryFreeDBServer(int port, ServerBuilder<?> serverBuilder, String postgresPort, String[] tables) throws SQLException {
+    public RetryFreeDBServer(int port, ServerBuilder<?> serverBuilder,String postgresAddress, String postgresPort, String[] tables) throws SQLException {
         this.server = serverBuilder
                 .maxInboundMessageSize(Integer.MAX_VALUE)
-                .addService(new RetryFreeDBService(postgresPort, tables))
+                .addService(new RetryFreeDBService(postgresAddress, postgresPort, tables))
                 .build();
         this.port = port;
     }
 
     public static void main(String[] args) throws IOException, InterruptedException, SQLException {
         int port = Integer.parseInt(args[0]);
-        String postgresPort = args[1];
-        String[] tables = args[2].split(",");
+        String postgresAddress = args[1];
+        String postgresPort = args[2];
+        String[] tables = args[3].split(",");
 //      SERVER
-        RetryFreeDBServer server = new RetryFreeDBServer(port, ServerBuilder.forPort(port), postgresPort, tables);
+        RetryFreeDBServer server = new RetryFreeDBServer(port, ServerBuilder.forPort(port), postgresAddress, postgresPort, tables);
         server.start();
         server.blockUntilShutdown();
     }
@@ -62,16 +64,16 @@ public class RetryFreeDBServer {
     public static class RetryFreeDBService extends RetryFreeDBServerGrpc.RetryFreeDBServerImplBase {
         private final Postgres repo;
         ConcurrentHashMap<String, Connection> transactions;
-        ConcurrentHashMap<String, Integer> lastIdUsed = new ConcurrentHashMap<>();
+        ConcurrentHashMap<String, AtomicInteger> lastIdUsed = new ConcurrentHashMap<>();
         private final AtomicLong lastTransactionId;
-        public RetryFreeDBService(String postgresPort, String[] tables) throws SQLException {
-            repo = new Postgres(postgresPort);
+        public RetryFreeDBService(String postgresAddress, String postgresPort, String[] tables) throws SQLException {
+            repo = new Postgres(postgresAddress, postgresPort);
             transactions = new ConcurrentHashMap<>();
             lastTransactionId =  new AtomicLong(0);
 
             for (String table :
                     tables) {
-                lastIdUsed.put(table, repo.lastId(table));
+                lastIdUsed.put(table, new AtomicInteger(repo.lastId(table)));
             }
             log.info("Table metadata initialization finished");
 
@@ -101,7 +103,7 @@ public class RetryFreeDBServer {
         private DBData deserilizeDataToDBData(Data request) {
             DBData d = DBTransaction.deserializeData(request);
             if (d instanceof DBInsertData && ((DBInsertData) d).getRecordId().isEmpty()) {
-                lastIdUsed.put(d.getTable(), lastIdUsed.get(d.getTable()) + 1);
+                lastIdUsed.get(d.getTable()).incrementAndGet();
                 ((DBInsertData) d).setRecordId(lastIdUsed.get(d.getTable()).toString());
             }
             return d;
@@ -116,7 +118,7 @@ public class RetryFreeDBServer {
 
             if (d != null) {
                 try {
-                    repo.lock(conn, d);
+                    repo.lock(request.getTransactionId(), conn, d);
                     if (d instanceof DBInsertData)
                         responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(((DBInsertData) d).getRecordId()).build());
                     else
@@ -140,7 +142,7 @@ public class RetryFreeDBServer {
 
             if (d != null) {
                 try {
-                    repo.lock(conn, d);
+                    repo.lock(request.getTransactionId(), conn, d);
                 } catch (SQLException e) {
                     responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not lock").build());
                     responseObserver.onError(new Exception("Could not lock"));
@@ -209,7 +211,7 @@ public class RetryFreeDBServer {
             try {
                 repo.release(conn);
                 transactions.remove(transactionId.getId());
-                log.info("Transaciton {} commited", transactionId.getId());
+                log.warn("{}, Transaciton commited", transactionId.getId());
                 responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("released").build());
                 responseObserver.onCompleted();
             } catch (SQLException e) {
