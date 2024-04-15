@@ -1,0 +1,33 @@
+all:
+  children:
+    servers:
+        hosts:
+#          129.114.108.195:
+#            ansible_user: "cc"
+#            ansible_connection: ssh
+#            port: 8001
+#            discovery_ip: 10.52.0.16
+#            id: "1"
+          129.114.109.118:
+            ansible_user: "cc"
+            ansible_connection: ssh
+            port: 8001
+            discovery_ip: 10.52.0.16
+            id: "1"
+
+
+#
+#    benchmark:
+#        hosts:
+#          129.114.108.81:
+#            ansible_user: "cc"
+#            ansible_connection: ssh
+#            port: 8001
+#            discovery_ip: 10.52.3.155
+#            id: "benchmark"
+#
+    prometheus:
+      hosts:
+        129.114.108.195:
+          ansible_user: "cc"
+          ansible_connection: ssh
