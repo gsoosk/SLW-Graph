@@ -155,7 +155,7 @@ public class Performance {
     private int NUM_OF_LILSTINGS = 100000;
     private int buy_or_sell = 1;
     private int buy_or_sell_hot = 1;
-    private Random random = new Random(1234);
+    private final Random random = new Random(1234);
     private static Map<String, Set<String>> readHotPlayerRecords(String filePath) {
         Map<String, Set<String>> map = new ConcurrentHashMap<>();
         try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
@@ -325,9 +325,17 @@ public class Performance {
         buy_or_sell++;
         if (chance < HOT_RECORD_SELECTION_CHANCE) {
             buy_or_sell_hot++;
-            if (hotListings.isEmpty())
-                buy_or_sell_hot = 1;
             List<String> playersAsList = new ArrayList<>(hotPlayersAndItems.keySet());
+            List<String> playersWhoCanSell = playersAsList.stream().filter(record-> !hotPlayersAndItems.get(record).isEmpty()).toList();
+
+            if (hotListings.isEmpty() && playersWhoCanSell.isEmpty())
+                return null;
+
+            if (hotListings.isEmpty())
+                buy_or_sell_hot = 1; // FORCE SELL
+            else if (playersWhoCanSell.isEmpty())
+                buy_or_sell_hot = 2; // FORCE BUY
+
             if (buy_or_sell_hot % 2 == 0) {
                 //buy
                 Map<String, String> tx = new HashMap<>();
@@ -347,8 +355,7 @@ public class Performance {
             } else {
                 //sell
                 Map<String, String> tx = new HashMap<>();
-                playersAsList.removeIf(record -> hotPlayersAndItems.get(record).isEmpty());
-                String randomPlayer = playersAsList.get(random.nextInt(playersAsList.size()));
+                String randomPlayer = playersWhoCanSell.get(random.nextInt(playersWhoCanSell.size()));
 
                 List<String> randomValues = new ArrayList<>(hotPlayersAndItems.get(randomPlayer));
                 String randomItem = randomValues.get(random.nextInt(randomValues.size()));
