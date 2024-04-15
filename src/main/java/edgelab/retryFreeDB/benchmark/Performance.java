@@ -42,6 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import static net.sourceforge.argparse4j.impl.Arguments.store;
@@ -196,6 +197,18 @@ public class Performance {
         return records;
     }
 
+    private void removeAlreadyListedRecords() {
+        for (String player : hotPlayersAndItems.keySet()) {
+            hotPlayersAndItems.get(player).removeIf(s -> {
+                for (String listing : hotListings.keySet()) {
+                    if (hotListings.get(listing).get(0).equals(s))
+                        return true;
+                }
+                return false;
+            });
+        }
+    }
+
     void start() throws Exception {
         /* parse args */
         address = res.getString("address");
@@ -254,6 +267,8 @@ public class Performance {
 
         hotPlayersAndItems = readHotPlayerRecords(res.getString("hotPlayers"));
         hotListings = readHotListingRecords(res.getString("hotListings"));
+        removeAlreadyListedRecords();
+
         this.HOT_RECORD_SELECTION_CHANCE = res.getInt("hotSelectionProb");
 
         if (res.getInt("maxThreads") != null)
@@ -269,10 +284,11 @@ public class Performance {
 
         log.info("Running benchmark for partition: " + partitionId);
 
-        Thread.sleep(3000);
+
 
 
         executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(MAX_THREADS);
+        Thread.sleep(3000);
         client = new Client(address, port);
 
         long sendingStart = System.currentTimeMillis();
@@ -317,6 +333,7 @@ public class Performance {
         executor.shutdownNow();
 
     }
+
 
     private ServerRequest getNextRequest() {
 //        TODO: Change to correct tx selection
@@ -392,7 +409,7 @@ public class Performance {
         if (stats != null)
             stats.nextAdded(1);
         Future<Void> future = executor.submit(() -> {
-            log.debug("sent");
+            boolean success = true;
             if (request.getType() == ServerRequest.Type.BUY) {
                 client.buyListingSLW(request.getValues().get("PId"), request.getValues().get("LId"));
             }
@@ -406,6 +423,8 @@ public class Performance {
                 }
                 else {
                     hotListings.put(request.getValues().get("LId"), List.of(request.getValues().get("IId"), request.getValues().get("price")));
+                    log.error("Unsuccessful buy {}", request.getValues());
+                    success = false;
                 }
             }
             else if (request.getType() == ServerRequest.Type.SELL_HOT) {
@@ -415,9 +434,11 @@ public class Performance {
                 }
                 else {
                     hotPlayersAndItems.get(request.getValues().get("PId")).add(request.getValues().get("IId"));
+                    log.error("Unsuccessful sell {}", request.getValues());
+                    success = false;
                 }
             }
-            if (stats != null)
+            if (stats != null && success)
                 stats.nextCompletion(request.start, 1);
             return null;
         });
