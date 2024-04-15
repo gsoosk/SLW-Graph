@@ -96,15 +96,14 @@ public class RetryFreeDBServer {
                 responseObserver.onNext(Result.newBuilder()
                         .setStatus(false)
                         .setMessage("b error: couldn't connect/commit,  {}").build());
-                responseObserver.onError(ex);
+                responseObserver.onCompleted();
             }
         }
 
         private DBData deserilizeDataToDBData(Data request) {
             DBData d = DBTransaction.deserializeData(request);
             if (d instanceof DBInsertData && ((DBInsertData) d).getRecordId().isEmpty()) {
-                lastIdUsed.get(d.getTable()).incrementAndGet();
-                ((DBInsertData) d).setRecordId(lastIdUsed.get(d.getTable()).toString());
+                ((DBInsertData) d).setRecordId(Integer.toString(lastIdUsed.get(d.getTable()).incrementAndGet()));
             }
             return d;
         }
@@ -125,8 +124,11 @@ public class RetryFreeDBServer {
                         responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
                     responseObserver.onCompleted();
                 } catch (SQLException e) {
-                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not lock").build());
-                    responseObserver.onError(new Exception("Could not lock"));
+                    if (e.getSQLState().equals(Postgres.DEADLOCK_ERROR))
+                        responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("deadlock").build());
+                    else
+                        responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not lock").build());
+                    responseObserver.onCompleted();
                 }
             }
 
@@ -144,15 +146,18 @@ public class RetryFreeDBServer {
                 try {
                     repo.lock(request.getTransactionId(), conn, d);
                 } catch (SQLException e) {
-                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not lock").build());
-                    responseObserver.onError(new Exception("Could not lock"));
+                    if (e.getSQLState().equals(Postgres.DEADLOCK_ERROR))
+                        responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("deadlock").build());
+                    else
+                        responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not lock").build());
+                    responseObserver.onCompleted();
                     return;
                 }
                 updateDBDataOnRepo(responseObserver, d, conn);
             }
             else {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not deserialize data").build());
-                responseObserver.onError(new Exception("Could not deserialize data"));
+                responseObserver.onCompleted();
             }
         }
 
@@ -169,7 +174,7 @@ public class RetryFreeDBServer {
             }
             else {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not deserialize data").build());
-                responseObserver.onError(new Exception("Could not deserialize data"));
+                responseObserver.onCompleted();
             }
         }
 
@@ -189,7 +194,7 @@ public class RetryFreeDBServer {
             }
             catch (SQLException ex) {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not perform update: " + ex.getMessage()).build());
-                responseObserver.onError(new Exception("Could not perform update: " + ex.getMessage()));
+                responseObserver.onCompleted();
             }
         }
 
@@ -216,7 +221,7 @@ public class RetryFreeDBServer {
                 responseObserver.onCompleted();
             } catch (SQLException e) {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not release the locks").build());
-                responseObserver.onError(e);
+                responseObserver.onCompleted();
             }
         }
 

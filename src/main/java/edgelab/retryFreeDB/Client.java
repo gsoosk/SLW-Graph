@@ -15,6 +15,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 
 import static edgelab.retryFreeDB.RetryFreeDBConfiguration.DELETE_TYPE;
 import static edgelab.retryFreeDB.RetryFreeDBConfiguration.INSERT_TYPE;
@@ -34,28 +36,54 @@ public class Client {
 
     public static void main(String args[])
     {
-        int hotRecordRatio = 100;
-        int playersHotRecords = hotRecordRatio * 1;
-        int itemsHotRecords = hotRecordRatio * 4;
-        int listingsHotRecords = hotRecordRatio * 1;
-
 
         Client client = new Client(args[0], Integer.parseInt(args[1]));
         Map<String, HashSet<String>> hotRecords = new HashMap<>();
 
 
-
-//        listings: 100,000, items: 2,500,000 = players * 5, players: 500,000
-
-
 //          client.buyListing("2", "1");
-          client.buyListingSLW("2", "100000000");
-//        client.addListing("7", "7", 280);
-//        client.addListingSLW("7", "7", 280);
+//          client.buyListingSLW("2", "100000000");
+//          client.simulateDeadlock();
+        client.addListing("7", "7", 280);
+//        client.addListingSLW("7", "7", x280);
+    }
+
+    private void simulateDeadlock() {
+        String tx1 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
+        String tx2 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
+
+        ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(2);
+        executor.submit(() -> lock(tx1, "Players", "PId", "10"));
+        delay();
+        executor.submit(() -> lock(tx2, "Players", "PId", "11"));
+        delay();
+        executor.submit(() -> lock(tx1, "Players", "PId", "11"));
+        delay();
+        executor.submit(() -> lock(tx2, "Players", "PId", "10"));// DEADLOCK
+
+
+        while (executor.getActiveCount() != 0) {
+            delay();
+        }
+
+
+        commit(tx1);
+        commit(tx2);
+
+
+    }
+
+    private static void delay() {
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
 
-    private void addListing(String PId, String IId, double price) {
+//    remoteCalls : 4
+    public String addListing(String PId, String IId, double price) {
 
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
@@ -72,9 +100,9 @@ public class Client {
             Map<String, String> item = read(transactionId, "Items", "IId", IId);
 //             Check the owner
             if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
-                log.info("item has a different owner!");
+                log.info("item has a different owner! {}<>{}", item.get("iowner"), PId);
                 commit(transactionId);
-                return;
+                return null;
             }
 
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
@@ -82,14 +110,19 @@ public class Client {
             if (player.isEmpty()) {
                 log.info("player does not exists!");
                 commit(transactionId);
-                return;
+                return null;
             }
 
-            insert(transactionId, "Listings",  IId + "," + price);
+            String listingRecordId = insertLock(transactionId, "Listings");
+            insert(transactionId, "Listings",  IId + "," + price, listingRecordId);
             commit(transactionId);
+            return listingRecordId;
         }
+
+        return null;
     }
 
+//    Remote calls: 4
     public String addListingSLW(String PId, String IId, double price) {
         log.info("add listing <PID:{}, IID:{}>", PId, IId);
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
@@ -101,7 +134,7 @@ public class Client {
             Map<String, String> item = read(transactionId, "Items", "IId", IId);
 //             Check the owner
             if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
-                log.debug("item has a different owner!");
+                log.error("item has a different owner! {}<>{}", item.get("iowner"), PId);
                 commit(transactionId);
                 return null;
             }
@@ -110,7 +143,7 @@ public class Client {
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
             if (player.isEmpty()) {
-                log.debug("player does not exists!");
+                log.error("player does not exists!");
                 commit(transactionId);
                 return null;
             }
@@ -122,7 +155,7 @@ public class Client {
         return null;
     }
 
-    private void buyListing(String PId, String LId) {
+    public String buyListing(String PId, String LId) {
 
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
 
@@ -133,25 +166,27 @@ public class Client {
             Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
 //            Check player exists
             if (listing.isEmpty()) {
-                log.debug("listing does not exists!");
+                log.info("listing does not exists!");
                 commit(transactionId);
-                return;
+                return null;
             }
 
             //            Read from P where pid
+            lock(transactionId, "Players", "PId", PId);
+//            TODO: WE MIGHT NEED TO ROLLBACK
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
             if (player.isEmpty()) {
-                log.debug("player does not exists!");
+                log.info("player does not exists!");
                 commit(transactionId);
-                return;
+                return null;
             }
 
             //            Check players cash for listing
             if (Double.parseDouble( player.get("pcash")) < Double.parseDouble(listing.get("lprice"))){
-                log.debug("player does not have enough cash");
+                log.info("player does not have enough cash");
                 commit(transactionId);
-                return;
+                return null;
             }
 
 
@@ -159,20 +194,21 @@ public class Client {
             Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
             //            Check item exists
             if (item.isEmpty()) {
-                log.debug("item does not exists!");
+                log.info("item does not exists!");
                 commit(transactionId);
-                return;
+                return null;
             }
 
 
 //            R from P where ppid
             String PPId =  item.get("iowner");
+            lock(transactionId, "Players", "PId", PPId);
             Map<String, String> prevOwner = read(transactionId, "Players", "PId", PPId);
             //            Check prevOwner exists
             if (prevOwner.isEmpty()) {
-                log.debug("previous owner does not exists!");
+                log.info("previous owner does not exists!");
                 commit(transactionId);
-                return;
+                return null;
             }
 
 //            Delete from L where LID
@@ -191,7 +227,9 @@ public class Client {
 
 //            Unlock
             commit(transactionId);
+            return listing.get("liid");
         }
+        return null;
     }
 
     public String buyListingSLW(String PId, String LId) {
@@ -204,7 +242,7 @@ public class Client {
             Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
 //            Check player exists
             if (listing.isEmpty()) {
-                log.debug("listing does not exists!");
+                log.error("listing does not exists!");
                 commit(transactionId);
                 return null;
             }
@@ -213,7 +251,7 @@ public class Client {
             Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
             //            Check item exists
             if (item.isEmpty()) {
-                log.debug("item does not exists!");
+                log.error("item does not exists!");
                 commit(transactionId);
                 return null;
             }
@@ -233,14 +271,14 @@ public class Client {
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
             if (player.isEmpty()) {
-                log.debug("player does not exists!");
+                log.error("player does not exists!");
                 commit(transactionId);
                 return null;
             }
 
             //            Check players cash for listing
             if (Double.parseDouble( player.get("pcash")) < Double.parseDouble(listing.get("lprice"))){
-                log.debug("player does not have enough cash");
+                log.error("player does not have enough cash");
                 commit(transactionId);
                 return null;
             }
@@ -249,7 +287,7 @@ public class Client {
             Map<String, String> prevOwner = read(transactionId, "Players", "PId", PPId);
             //            Check prevOwner exists
             if (prevOwner.isEmpty()) {
-                log.debug("previous owner does not exists!");
+                log.error("previous owner does not exists!");
                 commit(transactionId);
                 return null;
             }
@@ -313,7 +351,7 @@ public class Client {
                 .setValue(newKey + "," + newValue)
                 .build();
         Result writeResult = performRemoteOperation(writeData);
-        log.debug("Write to {} status: {}", tableName, writeResult.getStatus());
+        log.info("Write to {} status: {}", tableName, writeResult.getStatus());
     }
 
     private void delete(String transactionId, String tableName, String key, String value) {
@@ -323,7 +361,7 @@ public class Client {
                 .setKey(tableName + "," + key + "," + value)
                 .build();
         Result deleteResult = performRemoteOperation(deleteData);
-        log.debug("delete from {} status: {}", tableName, deleteResult.getStatus());
+        log.info("delete from {} status: {}", tableName, deleteResult.getStatus());
     }
 
     private Map<String, String> read(String transactionId, String tableName, String key, String value)  {
@@ -333,7 +371,7 @@ public class Client {
                 .setKey(tableName + "," + key + "," + value)
                 .build();
         Result readResult = performRemoteOperation(readData);
-        log.debug("read from {} status : {}", tableName, readResult.getStatus());
+        log.info("read from {} status : {}", tableName, readResult.getStatus());
         return convertStringToMap(readResult.getMessage());
     }
 
@@ -347,7 +385,7 @@ public class Client {
                 .setRecordId(recordId)
                 .build();
         Result result = blockingStub.update(insertData);
-        log.debug("insert data with id {} into {} status : {}", recordId, tableName, result.getStatus());
+        log.info("insert data with id {} into {} status : {}", recordId, tableName, result.getStatus());
     }
 
     private void insert(String transactionId, String tableName, String newRecord) {
@@ -358,7 +396,7 @@ public class Client {
                 .setValue(newRecord)
                 .build();
         Result result = blockingStub.lockAndUpdate(insertData);
-        log.debug("insert data with into {} status : {}", tableName, result.getStatus());
+        log.info("insert data with into {} status : {}", tableName, result.getStatus());
     }
 
     private void lock(String transactionId, String tableName, String key, String value) {
@@ -368,7 +406,7 @@ public class Client {
                 .setKey(tableName + "," + key + "," + value)
                 .build();
         Result lockResult = blockingStub.lock(lockData);
-        log.debug("lock on {},{} status: {}", tableName, key, lockResult.getStatus());
+        log.info("lock on {},{}:{} status: {} - message: {}", tableName, key, value, lockResult.getStatus(), lockResult.getMessage());
         if (locks.containsKey(transactionId)) {
             locks.get(transactionId).add(lockData.getKey());
         }
@@ -385,7 +423,7 @@ public class Client {
                 .setKey(tableName)
                 .build();
         Result lockResult = blockingStub.lock(lockData);
-        log.debug("lock on {} for insert status: {}", tableName, lockResult.getStatus());
+        log.info("lock on {} for insert status: {}", tableName, lockResult.getStatus());
         return lockResult.getMessage();
     }
 

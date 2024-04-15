@@ -20,6 +20,7 @@ import java.util.Map;
 
 @Slf4j
 public class Postgres implements Storage{
+    public static final String DEADLOCK_ERROR = "40P01";
     private static String url = "";
     private static final String user = "user";
     private static final String password = "password";
@@ -199,40 +200,6 @@ public class Postgres implements Storage{
         this.partitionId = partitionId;
     }
 
-    private void update(Connection conn, DBTransaction transaction) {
-        log.info("Updating the transaction");
-        for (DBData data: transaction.getDataList()) {
-            String lockSQL = "SELECT * FROM ? WHERE ? = ? FOR UPDATE";
-            try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
-                updateStmt.setString(1, data.getTable());
-                updateStmt.setString(2, data.getId());
-                updateStmt.setInt(3, data.getQuery());
-                updateStmt.executeUpdate();
-            }
-            catch (SQLException ex) {
-                log.info("db error: couldn't lock,  {}", ex.getMessage());
-                return;
-            }
-        }
-        log.info("Locks on rows acquired");
-    }
-    public void lockAll(Connection conn, DBTransaction transaction) {
-        log.info("Acquiring lock for transaction");
-        for (DBData data: transaction.getDataList()) {
-            String lockSQL = "SELECT * FROM ? WHERE ? = ? FOR UPDATE";
-            try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
-                updateStmt.setString(1, data.getTable());
-                updateStmt.setString(2, data.getId());
-                updateStmt.setInt(3, data.getQuery());
-                updateStmt.executeUpdate();
-            }
-            catch (SQLException ex) {
-                log.info("db error: couldn't lock,  {}", ex.getMessage());
-                return;
-            }
-        }
-        log.info("Locks on rows acquired");
-    }
     public void lock(String tx, Connection conn, DBData data) throws SQLException {
         log.warn("{}, Acquiring lock for data, {}:<{},{}>",tx, data.getTable(), data.getId(), data.getQuery());
         if (!(data instanceof DBInsertData)) {
@@ -248,7 +215,8 @@ public class Postgres implements Storage{
 
                 delay(LOCK_THINKING_TIME);
             } catch (SQLException ex) {
-                log.info("db error: couldn't lock,  {}", ex.getMessage());
+
+                log.error("{}, db error: couldn't lock,  {}:CODE:{}",tx, ex.getMessage(), ex.getSQLState());
                 throw ex;
             }
             log.warn("{}, Locks on rows acquired, {}:<{},{}>",tx, data.getTable(), data.getId(), data.getQuery());
