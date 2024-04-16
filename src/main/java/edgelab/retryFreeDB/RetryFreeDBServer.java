@@ -226,6 +226,24 @@ public class RetryFreeDBServer {
         }
 
 
+        @Override
+        public void rollBackTransaction(TransactionId transactionId, StreamObserver<Result> responseObserver) {
+            if (checkTransactionExists(transactionId.getId(), responseObserver)) return;
+
+            Connection conn = transactions.get(transactionId.getId());
+            try {
+                repo.rollback(conn);
+                transactions.remove(transactionId.getId());
+                log.warn("{}, Transaciton rollbacked", transactionId.getId());
+                responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("rollbacked").build());
+                responseObserver.onCompleted();
+            } catch (SQLException e) {
+                responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not rollback and release the locks").build());
+                responseObserver.onCompleted();
+            }
+        }
+
+
 
 //
 //        @Override

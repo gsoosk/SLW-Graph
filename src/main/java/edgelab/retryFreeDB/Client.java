@@ -1,7 +1,6 @@
 package edgelab.retryFreeDB;
 
 import edgelab.proto.RetryFreeDBServerGrpc;
-import io.grpc.Channel;
 import edgelab.proto.Data;
 import edgelab.proto.Empty;
 import edgelab.proto.TransactionId;
@@ -12,7 +11,6 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executors;
@@ -43,8 +41,8 @@ public class Client {
 
 //          client.buyListing("2", "1");
 //          client.buyListingSLW("2", "100000000");
-//          client.simulateDeadlock();
-        client.addListing("7", "7", 280);
+          client.simulateDeadlock();
+//        client.addListing("7", "7", 280);
 //        client.addListingSLW("7", "7", x280);
     }
 
@@ -52,7 +50,7 @@ public class Client {
         String tx1 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
         String tx2 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
 
-        ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(2);
+        ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(5);
         executor.submit(() -> lock(tx1, "Players", "PId", "10"));
         delay();
         executor.submit(() -> lock(tx2, "Players", "PId", "11"));
@@ -83,7 +81,7 @@ public class Client {
 
 
 //    remoteCalls : 4
-    public String addListing(String PId, String IId, double price) {
+    public String addListingDeadlockDetect(String PId, String IId, double price) {
 
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
@@ -97,6 +95,10 @@ public class Client {
 //                return;
 //            }
 
+            if (!lock(transactionId, "Items", "IId", IId).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
             Map<String, String> item = read(transactionId, "Items", "IId", IId);
 //             Check the owner
             if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
@@ -105,6 +107,10 @@ public class Client {
                 return null;
             }
 
+            if (!lock(transactionId, "Players", "PId", PId).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
             if (player.isEmpty()) {
@@ -122,7 +128,12 @@ public class Client {
         return null;
     }
 
-//    Remote calls: 4
+    private void rollback(String transactionId) {
+        Result rollbackRes = blockingStub.rollBackTransaction(TransactionId.newBuilder().setId(transactionId).build());
+        locks.remove(transactionId);
+    }
+
+    //    Remote calls: 4
     public String addListingSLW(String PId, String IId, double price) {
         log.info("add listing <PID:{}, IID:{}>", PId, IId);
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
@@ -156,7 +167,7 @@ public class Client {
         return null;
     }
 
-    public String buyListing(String PId, String LId) {
+    public String buyListingDeadlockDetect(String PId, String LId) {
 
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
 
@@ -164,6 +175,10 @@ public class Client {
             String transactionId = initResult.getMessage();
 
         //            R from L where Lid
+            if (!lock(transactionId, "Listings", "LId", LId).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
             Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
 //            Check player exists
             if (listing.isEmpty()) {
@@ -173,7 +188,10 @@ public class Client {
             }
 
             //            Read from P where pid
-            lock(transactionId, "Players", "PId", PId);
+            if(!lock(transactionId, "Players", "PId", PId).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
 //            TODO: WE MIGHT NEED TO ROLLBACK
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
@@ -192,6 +210,10 @@ public class Client {
 
 
 //            Read from I where LIID
+            if (!lock(transactionId, "Items", "IId", listing.get("liid")).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
             Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
             //            Check item exists
             if (item.isEmpty()) {
@@ -201,9 +223,16 @@ public class Client {
             }
 
 
+//            Delete from L where LID
+            delete(transactionId, "Listings", "LId", LId);
+
+
 //            R from P where ppid
             String PPId =  item.get("iowner");
-            lock(transactionId, "Players", "PId", PPId);
+            if (!lock(transactionId, "Players", "PId", PPId).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
             Map<String, String> prevOwner = read(transactionId, "Players", "PId", PPId);
             //            Check prevOwner exists
             if (prevOwner.isEmpty()) {
@@ -211,9 +240,6 @@ public class Client {
                 commit(transactionId);
                 return null;
             }
-
-//            Delete from L where LID
-            delete(transactionId, "Listings", "LId", LId);
 
 //          W into I where IId = Liid SET Iowner = pid
             write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId);
@@ -240,6 +266,7 @@ public class Client {
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
             //            R from L where Lid
+            lock(transactionId, "Listings", "LId", LId);
             Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
 //            Check player exists
             if (listing.isEmpty()) {
@@ -249,6 +276,7 @@ public class Client {
             }
 
 //            Read from I where LIID
+            lock(transactionId, "Items", "IId",  listing.get("liid"));
             Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
             //            Check item exists
             if (item.isEmpty()) {
@@ -400,14 +428,14 @@ public class Client {
         log.info("insert data with into {} status : {}", tableName, result.getStatus());
     }
 
-    private void lock(String transactionId, String tableName, String key, String value) {
+    private Result lock(String transactionId, String tableName, String key, String value) {
         Data lockData = Data.newBuilder()
                 .setTransactionId(transactionId)
                 .setType(READ_TYPE)
                 .setKey(tableName + "," + key + "," + value)
                 .build();
         Result lockResult = blockingStub.lock(lockData);
-        log.info("lock on {},{}:{} status: {} - message: {}", tableName, key, value, lockResult.getStatus(), lockResult.getMessage());
+        log.info("{}, lock on {},{}:{} status: {} - message: {}",transactionId, tableName, key, value, lockResult.getStatus(), lockResult.getMessage());
         if (locks.containsKey(transactionId)) {
             locks.get(transactionId).add(lockData.getKey());
         }
@@ -415,6 +443,7 @@ public class Client {
             locks.put(transactionId, new HashSet<>());
             locks.get(transactionId).add(lockData.getKey());
         }
+        return lockResult;
     }
 
     private String insertLock(String transactionId, String tableName) {

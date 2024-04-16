@@ -41,6 +41,7 @@ public class Postgres implements Storage{
         Connection conn = null;
         try {
             conn = DriverManager.getConnection(url, user, password);
+            conn.setAutoCommit(false);
             log.info("Connection created");
         } catch (SQLException e) {
             log.info(e.getMessage());
@@ -260,7 +261,7 @@ public class Postgres implements Storage{
         }
         log.info("Locks on table {} acquired", data.getTable());
     }
-public void release(Connection conn) throws SQLException { try {
+    public void release(Connection conn) throws SQLException { try {
             conn.commit();
             conn.close();
         } catch (SQLException e) {
@@ -269,6 +270,16 @@ public void release(Connection conn) throws SQLException { try {
         }
     }
 
+    public void rollback(Connection conn) throws SQLException {
+        try {
+            conn.rollback();
+            conn.close();
+        } catch (SQLException e) {
+            log.error("Could not rollback and release the locks: {}", e.getMessage());
+            throw e;
+        }
+
+    }
     public void remove(Connection conn, DBDeleteData data) throws SQLException {
 
         String SQL = "DELETE FROM "+ data.getTable() +" WHERE " + data.getId() + " = ?";
