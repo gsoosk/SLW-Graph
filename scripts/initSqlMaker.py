@@ -6,8 +6,8 @@ import random
 num_of_players = 500000
 num_of_each_player_items = 5
 num_of_initial_listings = 100000
-player_cash_range = (100, 1000)
-item_price_range = (20, 200)
+player_cash_range = (10000, 50000)
+item_price_range = (1, 5)
 name_length = 8
 
 text_file = open("init.sql", "w")
@@ -80,7 +80,7 @@ for item in range(num_of_each_player_items):
     shuffled_players = shuffle(num_of_players)
     for i in range(num_of_players):
         text_file.write(f'''
-    ({shuffled_items[item * num_of_players + i]},'I{randomString()}',{shuffled_players[i]}){';' if item == num_of_each_player_items - 1 and i == num_of_players - 1 else ','}''')
+    ({shuffled_players[i] * num_of_each_player_items + item},'I{randomString()}',{shuffled_players[i]}){';' if item == num_of_each_player_items - 1 and i == num_of_players - 1 else ','}''')
         pbar.update(1)
 pbar.close()
 

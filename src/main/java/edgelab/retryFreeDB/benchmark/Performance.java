@@ -392,7 +392,7 @@ public class Performance {
                 return new ServerRequest(ServerRequest.Type.BUY, txId++, tx , sendStartMs);
             } else {
                 String randomPlayer =  Integer.toString(random.nextInt(1, NUM_OF_PLAYERS));
-                String randomItem = Integer.toString(random.nextInt(1, NUM_OF_PLAYERS * 5));
+                String randomItem = Integer.toString(Integer.parseInt(randomPlayer) * 5 + random.nextInt(0,  5));
                 tx.put("PId", randomPlayer);
                 tx.put("IId", randomItem);
                 long sendStartMs = System.currentTimeMillis();

@@ -3,7 +3,7 @@ import os
 import random
 from random import randint
 
-HOT_RECORDS_PLAYERS = [1, 2, 4, 8, 16, 32]
+HOT_RECORDS_PLAYERS = [1, 2, 4, 8, 16, 32, 64, 128, 256]
 
 num_of_players = 500000
 num_of_initial_listings = 100000
