@@ -131,6 +131,7 @@ public class Client {
 
             String listingRecordId = insertLock(transactionId, "Listings");
 
+            lock(transactionId, "Items", "IId", IId);
             Map<String, String> item = read(transactionId, "Items", "IId", IId);
 //             Check the owner
             if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
@@ -139,7 +140,7 @@ public class Client {
                 return null;
             }
 
-
+            lock(transactionId, "Players", "PId", PId);
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
             if (player.isEmpty()) {
