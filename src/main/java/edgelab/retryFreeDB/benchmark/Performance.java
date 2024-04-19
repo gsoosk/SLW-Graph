@@ -146,6 +146,7 @@ public class Performance {
 //    Multi-threading
     private int MAX_THREADS = 4;
     private final int MAX_QUEUE_SIZE = 2;
+    private int MAX_RETRY = -1;
     private ThreadPoolExecutor executor;
     private Client client;
     private long txId = 0;
@@ -251,7 +252,6 @@ public class Performance {
         String payloadDelimiter = res.getString("payloadDelimiter").equals("\\n") ? "\n" : res.getString("payloadDelimiter");
         Long benchmarkTime = res.getLong("benchmarkTime");
 //        Integer timeout = res.getInt("timeout") != null ? res.getInt("timeout") : interval.intValue() * 2;
-        Integer maxRetry = res.getInt("maxRetry");
 
         Boolean exponentialLoad = res.getBoolean("exponentialLoad") == null ? false : res.getBoolean("exponentialLoad");
 
@@ -274,6 +274,7 @@ public class Performance {
         if (res.getInt("maxThreads") != null)
             this.MAX_THREADS = res.getInt("maxThreads");
 
+        this.MAX_RETRY = res.getInt("maxRetry");
 //        connectToDataStore(address, port);
 
 
@@ -405,43 +406,10 @@ public class Performance {
     }
 
     private void executeRequestFromThreadPool(ServerRequest request, Stats stats) {
-
         if (stats != null)
             stats.nextAdded(1);
-        Future<Void> future = executor.submit(() -> {
-            boolean success = true;
-            if (request.getType() == ServerRequest.Type.BUY) {
-                client.buyListingSLW(request.getValues().get("PId"), request.getValues().get("LId"));
-            }
-            else if (request.getType() == ServerRequest.Type.SELL) {
-                client.addListingSLW(request.getValues().get("PId"), request.getValues().get("IId"), 1);
-            }
-            else if (request.getType() == ServerRequest.Type.BUY_HOT) {
-                String newItem = client.buyListingSLW(request.getValues().get("PId"), request.getValues().get("LId"));
-                if (newItem != null) {
-                    hotPlayersAndItems.get(request.getValues().get("PId")).add(newItem);
-                }
-                else {
-                    hotListings.put(request.getValues().get("LId"), List.of(request.getValues().get("IId"), request.getValues().get("price")));
-                    log.error("Unsuccessful buy {}", request.getValues());
-                    success = false;
-                }
-            }
-            else if (request.getType() == ServerRequest.Type.SELL_HOT) {
-                String newListing = client.addListingSLW(request.getValues().get("PId"), request.getValues().get("IId"), 1);
-                if (newListing != null) {
-                    hotListings.put(newListing, List.of(request.getValues().get("IId"), "1"));
-                }
-                else {
-                    hotPlayersAndItems.get(request.getValues().get("PId")).add(request.getValues().get("IId"));
-                    log.error("Unsuccessful sell {}", request.getValues());
-                    success = false;
-                }
-            }
-            if (stats != null && success)
-                stats.nextCompletion(request.start, 1);
-            return null;
-        });
+
+        submitRequest(request, stats);
         while (executor.getQueue().size() >= MAX_QUEUE_SIZE) {
             try {
                 log.debug("sleep");
@@ -449,6 +417,73 @@ public class Performance {
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
+        }
+    }
+
+    private void submitRequest(ServerRequest request, Stats stats) {
+        Future<Void> future = executor.submit(() -> {
+            boolean success = true;
+
+            if (request.getType() == ServerRequest.Type.BUY) {
+                String newItem = client.buyListingDeadlockDetect(request.getValues().get("PId"), request.getValues().get("LId"));
+                if (newItem == null) {
+                    success = false;
+                    log.error("Unsuccessful buy {}", request.getValues());
+                    submitRetry(request, stats);
+                }
+            }
+            else if (request.getType() == ServerRequest.Type.SELL) {
+                String newListing = client.addListingDeadlockDetect(request.getValues().get("PId"), request.getValues().get("IId"), 1);
+                if (newListing == null) {
+                    success = false;
+                    log.error("Unsuccessful sell {}", request.getValues());
+                    submitRetry(request, stats);
+                }
+            }
+
+            else if (request.getType() == ServerRequest.Type.BUY_HOT) {
+                String newItem = client.buyListingDeadlockDetect(request.getValues().get("PId"), request.getValues().get("LId"));
+                if (newItem != null) {
+                    hotPlayersAndItems.get(request.getValues().get("PId")).add(newItem);
+                }
+                else {
+                    if (!isGoingToRetry(request))
+                        hotListings.put(request.getValues().get("LId"), List.of(request.getValues().get("IId"), request.getValues().get("price")));
+                    log.error("Unsuccessful buy {}", request.getValues());
+                    success = false;
+                    submitRetry(request, stats);
+                }
+            }
+            else if (request.getType() == ServerRequest.Type.SELL_HOT) {
+                String newListing = client.addListingDeadlockDetect(request.getValues().get("PId"), request.getValues().get("IId"), 1);
+                if (newListing != null) {
+                    hotListings.put(newListing, List.of(request.getValues().get("IId"), "1"));
+                }
+                else {
+                    if (!isGoingToRetry(request))
+                        hotPlayersAndItems.get(request.getValues().get("PId")).add(request.getValues().get("IId"));
+                    log.error("Unsuccessful sell {}", request.getValues());
+                    success = false;
+                    submitRetry(request, stats);
+                }
+            }
+            if (stats != null && success)
+                stats.nextCompletion(request.start, 1);
+            return null;
+        });
+    }
+
+    private boolean isGoingToRetry(ServerRequest request) {
+        return MAX_RETRY > 0 && request.getRetried() < MAX_RETRY;
+    }
+
+    private void submitRetry(ServerRequest request, Stats stats) {
+        if (this.MAX_RETRY > 0 && request.getRetried() < this.MAX_RETRY) {
+            request.retry();
+            if (stats != null)
+                stats.addRetry(request.getTransactionId());
+            log.error("retrying the request {}, number of retried: {}", request.getValues(), request.getRetried());
+            submitRequest(request, stats);
         }
     }
 
@@ -676,15 +711,6 @@ public class Performance {
                 .metavar("TIMEOUT")
                 .help("timeout of each batch request. It is two times of interval by default");
 
-        parser.addArgument("--max-retry")
-                .action(store())
-                .required(false)
-                .setDefault(-1)
-                .type(Integer.class)
-                .dest("maxRetry")
-                .metavar("MAXRETRY")
-                .help("Maximum number of times a request can be retried");
-
         parser.addArgument("--dynamic-batch-size")
                 .action(append())
                 .required(false)
@@ -780,6 +806,15 @@ public class Performance {
                 .help("number of maximum threads for sending the load");
 
 
+        parser.addArgument("--max-retry")
+                .action(store())
+                .required(false)
+                .setDefault(-1)
+                .type(Integer.class)
+                .dest("maxRetry")
+                .metavar("MAXRETRY")
+                .help("Maximum number of times a request can be retried");
+
 
         return parser;
     }
@@ -807,7 +842,7 @@ public class Performance {
         private String resultFilePath;
         private double interval;
         private int timeout;
-        private Map<Long, Integer> retries;
+        private final Map<Long, Integer> retries;
         private int previousWindowRequestRetried;
         private int previousWindowRetries;
         private int completedRetries;
@@ -900,7 +935,7 @@ public class Performance {
             this.timeout = timeout;
             timeoutGauge.set(timeout);
             memoryGauge.set(memory);
-            this.retries = new HashMap<>();
+            this.retries = new ConcurrentHashMap<>();
             this.hotRecords = hotRecords;
             this.hotChance = hotChance;
             this.threads = threads;
