@@ -9,10 +9,13 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -25,6 +28,7 @@ import static edgelab.retryFreeDB.RetryFreeDBConfiguration.WRITE_TYPE;
 public class Client {
     private final RetryFreeDBServerGrpc.RetryFreeDBServerBlockingStub blockingStub;
     private final ManagedChannel channel;
+    private Map<String, Set<String>> locks = new ConcurrentHashMap<>();
 
     public Client(String toConnectAddress, int toConnectPort)
     {
@@ -40,10 +44,32 @@ public class Client {
 
 
 //          client.buyListing("2", "1");
-//          client.buyListingSLW("2", "100000000");
-          client.simulateDeadlock();
+        client.addListingSLW("1", "3", 1);
+          client.buyListingSLW("2", "1000");
+//          client.simulateDeadlock();
 //        client.addListing("7", "7", 280);
-//        client.addListingSLW("7", "7", x280);
+        client.readItem(List.of("10", "11", "12"));
+
+    }
+
+    public void readItem(List<String> items) {
+        Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
+        if (initResult.getStatus()) {
+            String tx = initResult.getMessage();
+            Collections.sort(items);
+            for (String IId:
+                 items) {
+                lock(tx, "Items", "IId", IId);
+
+            }
+
+            for (String IId:
+                    items) {
+                Map<String, String> item = read(tx, "Items", "IId", IId);
+            }
+
+            commit(tx);
+        }
     }
 
     private void simulateDeadlock() {
@@ -55,9 +81,16 @@ public class Client {
         delay();
         executor.submit(() -> lock(tx2, "Players", "PId", "11"));
         delay();
-        executor.submit(() -> lock(tx1, "Players", "PId", "11"));
+        executor.submit(() -> { if (!lock(tx1, "Players", "PId", "11").getStatus())
+                                    rollback(tx1);
+        });
         delay();
-        executor.submit(() -> lock(tx2, "Players", "PId", "10"));// DEADLOCK
+        executor.submit(() -> {
+
+            if (!lock(tx2, "Players", "PId", "10").getStatus()) {
+                rollback(tx2);
+            };
+        });// DEADLOCK
 
 
         while (executor.getActiveCount() != 0) {
@@ -72,8 +105,12 @@ public class Client {
     }
 
     private static void delay() {
+        delay(100);
+    }
+
+    private static void delay(long mili) {
         try {
-            Thread.sleep(100);
+            Thread.sleep(mili);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
@@ -152,6 +189,7 @@ public class Client {
             }
 
             lock(transactionId, "Players", "PId", PId);
+            // unlock(transactionId, "Items", "IId", IId);
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
             if (player.isEmpty()) {
@@ -326,10 +364,13 @@ public class Client {
 
 //            Delete from L where LID
             delete(transactionId, "Listings", "LId", LId);
+//            unlock(transactionId, "Listings", "LId", LId);
 
 //          W into I where IId = Liid SET Iowner = pid
             write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId);
+            // unlock(transactionId, "Items", "IId", listing.get("liid"));
 
+            delay(1000);
 //           W into P where Pid SET pCash = new Cash
             String newCash = Double.toString(Double.parseDouble( player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
             write(transactionId, "Players", "PId", PId, "Pcash", newCash);
@@ -345,7 +386,21 @@ public class Client {
         return null;
     }
 
-    private Map<String, Set<String>> locks = new HashMap<>();
+    private Result unlock(String transactionId, String tableName, String key, String value) {
+        Data lockData = Data.newBuilder()
+                .setTransactionId(transactionId)
+                .setType(READ_TYPE)
+                .setKey(tableName + "," + key + "," + value)
+                .build();
+        Result unlockResult = blockingStub.unlock(lockData);
+        log.info("{}, unlock {},{}:{} status: {} - message: {}",transactionId, tableName, key, value, unlockResult.getStatus(), unlockResult.getMessage());
+        if (locks.containsKey(transactionId)) {
+            locks.get(transactionId).remove(lockData.getKey());
+        }
+        return unlockResult;
+    }
+
+
 
     private Result performRemoteOperation(Data data) {
         boolean lockBeforeOperation = true;

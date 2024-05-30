@@ -124,8 +124,9 @@ public class RetryFreeDBServer {
                         responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
                     responseObserver.onCompleted();
                 } catch (SQLException e) {
-                    if (e.getSQLState().equals(Postgres.DEADLOCK_ERROR))
+                    if (e.getSQLState().equals(Postgres.DEADLOCK_ERROR)) {
                         responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("deadlock").build());
+                    }
                     else
                         responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not lock").build());
                     responseObserver.onCompleted();
@@ -133,7 +134,27 @@ public class RetryFreeDBServer {
             }
 
         }
+        @Override
+        public void unlock(Data request, StreamObserver<Result> responseObserver) {
+            if (checkTransactionExists(request.getTransactionId(), responseObserver)) return;
 
+            Connection conn = transactions.get(request.getTransactionId());
+            DBData d = deserilizeDataToDBData(request);
+
+            if (d != null) {
+                try {
+                    repo.unlock(request.getTransactionId(), conn, d);
+                    if (d instanceof DBInsertData)
+                        responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(((DBInsertData) d).getRecordId()).build());
+                    else
+                        responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
+                    responseObserver.onCompleted();
+                } catch (SQLException e) {
+                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not unlock").build());
+                    responseObserver.onCompleted();
+                }
+            }
+        }
 
         @Override
         public void lockAndUpdate(Data request, StreamObserver<Result> responseObserver) {

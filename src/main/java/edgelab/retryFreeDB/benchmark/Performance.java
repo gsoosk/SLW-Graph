@@ -19,6 +19,7 @@ import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.MutuallyExclusiveGroup;
 import net.sourceforge.argparse4j.inf.Namespace;
+import org.checkerframework.checker.units.qual.A;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -33,17 +34,20 @@ import java.nio.file.Paths;
 import java.rmi.RemoteException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static net.sourceforge.argparse4j.impl.Arguments.store;
 import static net.sourceforge.argparse4j.impl.Arguments.append;
@@ -144,13 +148,16 @@ public class Performance {
     private int port;
 
 //    Multi-threading
-    private int MAX_THREADS = 4;
+    private int MAX_THREADS = 60;
+    private int MAX_ITEM_READ_THREADS = 20;
     private final int MAX_QUEUE_SIZE = 2;
     private int MAX_RETRY = -1;
     private ThreadPoolExecutor executor;
+    private ThreadPoolExecutor itemExecutor;
     private Client client;
     private long txId = 0;
     private Map<String, Set<String>> hotPlayersAndItems; // Player:{items}
+    private List<String> hotItems = new ArrayList<>();
     private Map<String, List<String>> hotListings; // Listing: <iid, price>
     private int HOT_RECORD_SELECTION_CHANCE = 80;
     private int NUM_OF_PLAYERS = 500000;
@@ -250,7 +257,8 @@ public class Performance {
         String partitionId = res.getString("partitionId");
         // since default value gets printed with the help text, we are escaping \n there and replacing it with correct value here.
         String payloadDelimiter = res.getString("payloadDelimiter").equals("\\n") ? "\n" : res.getString("payloadDelimiter");
-        Long benchmarkTime = res.getLong("benchmarkTime");
+        warmup = 5;
+        final Long benchmarkTime = res.getLong("benchmarkTime") + warmup;
 //        Integer timeout = res.getInt("timeout") != null ? res.getInt("timeout") : interval.intValue() * 2;
 
         Boolean exponentialLoad = res.getBoolean("exponentialLoad") == null ? false : res.getBoolean("exponentialLoad");
@@ -266,6 +274,7 @@ public class Performance {
 
 
         hotPlayersAndItems = readHotPlayerRecords(res.getString("hotPlayers"));
+        populateHotItems();
         hotListings = readHotListingRecords(res.getString("hotListings"));
         removeAlreadyListedRecords();
 
@@ -274,21 +283,25 @@ public class Performance {
         if (res.getInt("maxThreads") != null)
             this.MAX_THREADS = res.getInt("maxThreads");
 
+        if (res.getInt("maxItemsThreads") != null)
+            this.MAX_ITEM_READ_THREADS = res.getInt("maxItemsThreads");
+
+        this.MAX_THREADS -= this.MAX_ITEM_READ_THREADS;
+
         this.MAX_RETRY = res.getInt("maxRetry");
 //        connectToDataStore(address, port);
 
 
         long startMs = System.currentTimeMillis();
-        warmup = 5;
-        benchmarkTime += warmup;
-
 
         log.info("Running benchmark for partition: " + partitionId);
 
 
 
-
         executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(MAX_THREADS);
+        itemExecutor = (ThreadPoolExecutor) Executors.newFixedThreadPool(MAX_ITEM_READ_THREADS);
+
+
         Thread.sleep(3000);
         client = new Client(address, port);
 
@@ -296,17 +309,57 @@ public class Performance {
 
 //            TODO: Refactor this function
         long startToWaitTime = System.currentTimeMillis();
-        Stats stats = null;
+        Stats stats = new Stats(numRecords, 1000, resultFilePath, metricsFilePath, recordSize, 0, 0.0, 0, 20000, res.getString("hotPlayers"), HOT_RECORD_SELECTION_CHANCE, MAX_THREADS);
+
+        Integer numberOfItemsToRead = res.get("readItemNumber");
+        Thread itemThread = null;
+        if (numberOfItemsToRead > 0) {
+            itemThread = Executors.defaultThreadFactory().newThread(() -> {
+                log.info("Item read thread has been created");
+
+                while ((System.currentTimeMillis() - sendingStart) / 1000 < benchmarkTime) {
+                    // generate a List that contains the numbers 0 to 9
+                    List<Integer> indices = IntStream.range(0, hotItems.size()).boxed().collect(Collectors.toList());
+                    Collections.shuffle(indices);
+                    List<String> itemsToGet = new ArrayList<>();
+                    for (int i = 0; i < numberOfItemsToRead; i++) {
+                        itemsToGet.add(hotItems.get(indices.get(i)));
+                    }
+
+
+                    itemExecutor.submit(() -> {
+                        int itemId = random.nextInt(hotItems.size());
+                        client.readItem(itemsToGet);
+                        log.info("Item {} read finished", hotItems.get(itemId));
+                        stats.itemReadFinished();
+                    });
+
+
+                    while (itemExecutor.getQueue().size() >= MAX_QUEUE_SIZE) {
+                        if ((System.currentTimeMillis() - sendingStart) / 1000 >= benchmarkTime)
+                            break;
+                        try {
+                            log.debug("sleep");
+                            Thread.sleep(1);
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                }
+            });
+            itemThread.start();
+        }
+
         for (long i = 0; i < numRecords; i++) {
 
 
             long sendStartMs = System.currentTimeMillis();
             long timeElapsed = (sendStartMs - sendingStart) / 1000;
 
-            if (stats == null && timeElapsed > warmup)
-                stats = new Stats(numRecords, 1000, resultFilePath, metricsFilePath, recordSize, 0, 0.0, 0, 20000, res.getString("hotPlayers"), HOT_RECORD_SELECTION_CHANCE, MAX_THREADS);
             if (timeElapsed > warmup)
-                stats.report(sendStartMs);
+                stats.exitWarmup();
+
+            stats.report(sendStartMs);
 
             ServerRequest request = getNextRequest();
             executeRequestFromThreadPool(request, stats);
@@ -331,8 +384,19 @@ public class Performance {
         stats.printTotal();
         metricServer.close();
 
+        itemExecutor.shutdownNow();
+        if (itemThread != null) {
+            itemThread.interrupt();
+        }
         executor.shutdownNow();
 
+
+    }
+
+    private void populateHotItems() {
+        for (String player : hotPlayersAndItems.keySet()) {
+            hotItems.addAll(hotPlayersAndItems.get(player));
+        }
     }
 
 
@@ -406,8 +470,7 @@ public class Performance {
     }
 
     private void executeRequestFromThreadPool(ServerRequest request, Stats stats) {
-        if (stats != null)
-            stats.nextAdded(1);
+        stats.nextAdded(1);
 
         submitRequest(request, stats);
         while (executor.getQueue().size() >= MAX_QUEUE_SIZE) {
@@ -425,7 +488,7 @@ public class Performance {
             boolean success = true;
 
             if (request.getType() == ServerRequest.Type.BUY) {
-                String newItem = client.buyListingDeadlockDetect(request.getValues().get("PId"), request.getValues().get("LId"));
+                String newItem = client.buyListingSLW(request.getValues().get("PId"), request.getValues().get("LId"));
                 if (newItem == null) {
                     success = false;
                     log.error("Unsuccessful buy {}", request.getValues());
@@ -433,7 +496,7 @@ public class Performance {
                 }
             }
             else if (request.getType() == ServerRequest.Type.SELL) {
-                String newListing = client.addListingDeadlockDetect(request.getValues().get("PId"), request.getValues().get("IId"), 1);
+                String newListing = client.addListingSLW(request.getValues().get("PId"), request.getValues().get("IId"), 1);
                 if (newListing == null) {
                     success = false;
                     log.error("Unsuccessful sell {}", request.getValues());
@@ -442,7 +505,7 @@ public class Performance {
             }
 
             else if (request.getType() == ServerRequest.Type.BUY_HOT) {
-                String newItem = client.buyListingDeadlockDetect(request.getValues().get("PId"), request.getValues().get("LId"));
+                String newItem = client.buyListingSLW(request.getValues().get("PId"), request.getValues().get("LId"));
                 if (newItem != null) {
                     hotPlayersAndItems.get(request.getValues().get("PId")).add(newItem);
                 }
@@ -455,7 +518,7 @@ public class Performance {
                 }
             }
             else if (request.getType() == ServerRequest.Type.SELL_HOT) {
-                String newListing = client.addListingDeadlockDetect(request.getValues().get("PId"), request.getValues().get("IId"), 1);
+                String newListing = client.addListingSLW(request.getValues().get("PId"), request.getValues().get("IId"), 1);
                 if (newListing != null) {
                     hotListings.put(newListing, List.of(request.getValues().get("IId"), "1"));
                 }
@@ -467,7 +530,7 @@ public class Performance {
                     submitRetry(request, stats);
                 }
             }
-            if (stats != null && success)
+            if (success)
                 stats.nextCompletion(request.start, 1);
             return null;
         });
@@ -478,10 +541,9 @@ public class Performance {
     }
 
     private void submitRetry(ServerRequest request, Stats stats) {
-        if (this.MAX_RETRY > 0 && request.getRetried() < this.MAX_RETRY) {
+        if (isGoingToRetry(request)) {
             request.retry();
-            if (stats != null)
-                stats.addRetry(request.getTransactionId());
+            stats.addRetry(request.getTransactionId());
             log.error("retrying the request {}, number of retried: {}", request.getValues(), request.getRetried());
             submitRequest(request, stats);
         }
@@ -815,11 +877,28 @@ public class Performance {
                 .metavar("MAXRETRY")
                 .help("Maximum number of times a request can be retried");
 
+        parser.addArgument("--max-items-threads")
+                .action(store())
+                .required(false)
+                .type(Integer.class)
+                .dest("maxItemsThreads")
+                .metavar("MAXITEMSTHREADS")
+                .help("number of maximum threads for reading item");
+
+
+        parser.addArgument("--read-item-number")
+                .action(store())
+                .required(true)
+                .type(Integer.class)
+                .dest("readItemNumber")
+                .metavar("READITEMNUMBER")
+                .help("number of items to read at the same time");
 
         return parser;
     }
 
     private static class Stats {
+        private boolean warmup;
         private long start;
         private long windowStart;
         private int[] latencies;
@@ -842,7 +921,7 @@ public class Performance {
         private String resultFilePath;
         private double interval;
         private int timeout;
-        private final Map<Long, Integer> retries;
+        private Map<Long, Integer> retries;
         private int previousWindowRequestRetried;
         private int previousWindowRetries;
         private int completedRetries;
@@ -901,8 +980,13 @@ public class Performance {
                 .name("memory_usage")
                 .help("Memory usage of database")
                 .register();
+        private int itemCount;
 
         public Stats(long numRecords, int reportingInterval, String resultFilePath, String metricsFilePath, int recordSize, int batchSize, Double interval, int timeout, long memory, String hotRecords, int hotChance, int threads) {
+            init(numRecords, reportingInterval, resultFilePath, metricsFilePath, recordSize, batchSize, interval, timeout, memory, hotRecords, hotChance, threads);
+        }
+
+        private void init(long numRecords, int reportingInterval, String resultFilePath, String metricsFilePath, int recordSize, int batchSize, Double interval, int timeout, long memory, String hotRecords, int hotChance, int threads) {
             this.start = System.currentTimeMillis();
             this.windowStart = System.currentTimeMillis();
             this.iteration = 0;
@@ -950,7 +1034,7 @@ public class Performance {
 
                 // Check if the file already exists to avoid overwriting it
                 if (!Files.exists(path)) {
-                    String CSVHeader = "num of records, hot_records, prob, threads, throughput(tx/s)\n";
+                    String CSVHeader = "num of records, hot_records, prob, threads, throughput(tx/s), item_read(tx/s)\n";
                     BufferedWriter out = new BufferedWriter(new FileWriter(resultFilePath));
 
                     // Writing the header to output stream
@@ -984,6 +1068,8 @@ public class Performance {
         }
 
         private void report(long time) {
+            if (warmup)
+                return;
             if (time - windowStart >= reportingInterval) {
                 printWindow();
                 newWindow();
@@ -991,6 +1077,8 @@ public class Performance {
         }
 
         public void nextCompletion(long start, int bytes) {
+            if (warmup)
+                return;
             long now = System.currentTimeMillis();
             int latency = (int) (now - start);
             record(iteration, latency, bytes, now);
@@ -1004,6 +1092,8 @@ public class Performance {
         }
 
         public synchronized void nextAdded(int bytes) {
+            if (warmup)
+                return;
             long now = System.currentTimeMillis();
             this.started++;
             addedRequestsBytes.observe(bytes);
@@ -1014,6 +1104,8 @@ public class Performance {
         }
 
         public void nextCompletion(long start, long end, int bytes) {
+            if (warmup)
+                return;
             int latency = (int) (end - start);
             record(iteration, latency, bytes, end);
             this.iteration++;
@@ -1047,16 +1139,20 @@ public class Performance {
         }
 
         public void printTotal() {
+            if (warmup)
+                return;
             long elapsed = System.currentTimeMillis() - start;
             double recsPerSec = 1000.0 * count / (double) elapsed;
+            double itemsPerSec = 1000.0 * itemCount / (double) elapsed;
             double mbPerSec = 1000.0 * this.bytes / (double) elapsed / (1024.0);
             double throughputMbPerSec = 1000.0 * this.startedBytes / (double) elapsed / (1024.0);
             int[] percs = percentiles(this.latencies, index, 0.5, 0.95, 0.99, 0.999);
-            System.out.printf("%d records sent, %f records/sec (%.3f KB/sec) of (%.3f KB/sec), %.2f ms avg latency, %.2f ms max latency, %d ms 50th, %d ms 95th, %d ms 99th, %d ms 99.9th.%n --  requests retried: %d, retries: %d\n",
+            System.out.printf("%d records sent, %f records/sec (%.3f KB/sec) of (%.3f KB/sec), %.3f items/sec, %.2f ms avg latency, %.2f ms max latency, %d ms 50th, %d ms 95th, %d ms 99th, %d ms 99.9th.%n --  requests retried: %d, retries: %d\n",
                     count,
                     recsPerSec,
                     mbPerSec,
                     throughputMbPerSec,
+                    itemsPerSec,
                     totalLatency / (double) count,
                     (double) maxLatency,
                     percs[0],
@@ -1065,13 +1161,13 @@ public class Performance {
                     percs[3],
                     retries.size(),
                     retries.values().stream().mapToInt(Integer::intValue).sum());
-            String CSVHeader = "num of records, hot_records, prob, threads, throughput(tx/s)\n";
-            String resultCSV = String.format("%d,%s,%d,%d,%.2f\n",
+            String resultCSV = String.format("%d,%s,%d,%d,%.2f,%.2f\n",
                     count,
                     hotRecords,
                     hotChance,
                     threads,
-                    recsPerSec);
+                    recsPerSec,
+                    itemsPerSec);
             try {
                 BufferedWriter out = new BufferedWriter(
                         new FileWriter(resultFilePath, true));
@@ -1099,6 +1195,8 @@ public class Performance {
         }
 
         public void addRetry(long c) {
+            if (warmup)
+                return;
             allRetries.inc();
             if (retries.containsKey(c))
                 retries.put(c, retries.get(c) + 1);
@@ -1137,6 +1235,19 @@ public class Performance {
 
         public void changeMemory(long memoryTrigger) {
             memoryGauge.set(memoryTrigger);
+        }
+
+        public void exitWarmup() {
+            if (warmup) {
+                this.start = System.currentTimeMillis();
+                warmup = false;
+            }
+        }
+
+        public void itemReadFinished() {
+            if (warmup)
+                return;
+            this.itemCount++;
         }
     }
 

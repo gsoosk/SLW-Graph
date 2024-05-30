@@ -203,16 +203,20 @@ public class Postgres implements Storage{
 
     public void lock(String tx, Connection conn, DBData data) throws SQLException {
         log.warn("{}, Acquiring lock for data, {}:<{},{}>",tx, data.getTable(), data.getId(), data.getQuery());
+//      Assumption: Only lock based on the primary key
+
         if (!(data instanceof DBInsertData)) {
 //        FIXME: Risk of sql injection
-            String lockSQL = "SELECT * FROM " + data.getTable() + " WHERE " + data.getId() + " = ? FOR UPDATE";
-            try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
-                updateStmt.setInt(1, data.getQuery());
-                ResultSet rs = updateStmt.executeQuery();
-                if (!rs.next()) {
-                    log.info("no row with id found!");
+//            String lockSQL = "SELECT * FROM " + data.getTable() + " WHERE " + data.getId() + " = ? FOR UPDATE";
+//            try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL))
+            try
+            {
+//                updateStmt.setInt(1, data.getQuery());
+//                ResultSet rs = updateStmt.executeQuery();
+//                if (!rs.next()) {
+//                    log.info("no row with id found!");
                     getAdvisoryLock(conn, data.getTable(), data.getQuery());
-                }
+//                }
 
                 delay(LOCK_THINKING_TIME);
             } catch (SQLException ex) {
@@ -236,7 +240,7 @@ public class Postgres implements Storage{
     }
 
     private static void getAdvisoryLock(Connection conn, String tableName, Integer id) throws SQLException {
-        String lockSQL = "SELECT pg_advisory_xact_lock('" + tableName + "'::regclass::integer, ?)";
+        String lockSQL = "SELECT pg_advisory_lock('" + tableName + "'::regclass::integer, ?)";
         try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
             updateStmt.setInt(1, id);
             updateStmt.executeQuery();
@@ -245,6 +249,32 @@ public class Postgres implements Storage{
             throw ex;
         }
         log.info("Advisory lock on {},{} is acquired", tableName, id);
+    }
+
+    private static void unlockAllAdvisoryLocks(Connection conn) throws SQLException {
+        String lockSQL = "SELECT pg_advisory_unlock_all()";
+        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+            updateStmt.executeQuery();
+        } catch (SQLException ex) {
+            log.info("db error: couldn't unlock all,  {}", ex.getMessage());
+            throw ex;
+        }
+        log.info("All Advisory locks unlocked");
+    }
+
+    public void unlock(String tx, Connection conn, DBData data) throws SQLException {
+        unlockAdvisory(conn, data.getTable(), data.getQuery());
+    }
+    private static void unlockAdvisory(Connection conn, String tableName, Integer id) throws SQLException {
+        String lockSQL = "SELECT pg_advisory_unlock('" + tableName + "'::regclass::integer, ?)";
+        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+            updateStmt.setInt(1, id);
+            updateStmt.executeQuery();
+        } catch (SQLException ex) {
+            log.error("db error: couldn't unlock,  {}", ex.getMessage());
+            throw ex;
+        }
+        log.info("Advisory lock unlocked {},{}", tableName, id);
     }
 
 
@@ -263,6 +293,7 @@ public class Postgres implements Storage{
     }
     public void release(Connection conn) throws SQLException { try {
             conn.commit();
+            unlockAllAdvisoryLocks(conn);
             conn.close();
         } catch (SQLException e) {
             log.error("Could not release the locks: {}", e.getMessage());
@@ -273,6 +304,7 @@ public class Postgres implements Storage{
     public void rollback(Connection conn) throws SQLException {
         try {
             conn.rollback();
+            unlockAllAdvisoryLocks(conn);
             conn.close();
         } catch (SQLException e) {
             log.error("Could not rollback and release the locks: {}", e.getMessage());
