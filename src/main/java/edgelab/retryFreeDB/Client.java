@@ -44,11 +44,41 @@ public class Client {
 
 
 //          client.buyListing("2", "1");
-        client.addListingSLW("1", "3", 1);
-          client.buyListingSLW("2", "1000");
+//        client.addListingSLW("1", "3", 1);
+//          client.buyListingSLW("2", "1000");
 //          client.simulateDeadlock();
+          client.test();
 //        client.addListing("7", "7", 280);
-        client.readItem(List.of("10", "11", "12"));
+//        client.readItem(List.of("10", "11", "12"));
+
+    }
+
+    private void test() {
+        String tx1 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
+        String tx2 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
+
+        ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(5);
+        executor.submit(()->  {lock(tx1, "Players", "PId", "10");
+            lock(tx1,"Players", "PId", "9" );
+        });
+        delay();
+
+        executor.submit(()->  lock(tx2, "Players", "PId", "11"));
+        delay();
+
+        executor.submit(()->  {
+            lock(tx2, "Players", "PId", "10");
+            log.info("{} now can access 10", tx2);
+        });
+        delay();
+
+//        executor.submit(()->  {
+//            lock(tx1, "Players", "PId", "11");});
+//        delay();
+
+        executor.submit(()-> rollback(tx1));
+//        commit(tx2);
+//        commit(tx1);
 
     }
 
@@ -118,7 +148,7 @@ public class Client {
 
 
 //    remoteCalls : 4
-    public String addListingDeadlockDetect(String PId, String IId, double price) {
+    public String addListing(String PId, String IId, double price) {
 
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
@@ -137,6 +167,11 @@ public class Client {
                 return null;
             }
             Map<String, String> item = read(transactionId, "Items", "IId", IId);
+            if (item.isEmpty()) {
+                log.info("Item does not exists!");
+                commit(transactionId);
+                return null;
+            }
 //             Check the owner
             if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
                 log.info("item has a different owner! {}<>{}", item.get("iowner"), PId);
@@ -156,7 +191,12 @@ public class Client {
                 return null;
             }
 
-            String listingRecordId = insertLock(transactionId, "Listings");
+            Result insertListingResult = insertLock(transactionId, "Listings");
+            if (!insertListingResult.getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+            String listingRecordId = insertListingResult.getMessage();
             insert(transactionId, "Listings",  IId + "," + price, listingRecordId);
             commit(transactionId);
             return listingRecordId;
@@ -177,7 +217,7 @@ public class Client {
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
 
-            String listingRecordId = insertLock(transactionId, "Listings");
+            String listingRecordId = insertLock(transactionId, "Listings").getMessage();
 
             lock(transactionId, "Items", "IId", IId);
             Map<String, String> item = read(transactionId, "Items", "IId", IId);
@@ -189,7 +229,7 @@ public class Client {
             }
 
             lock(transactionId, "Players", "PId", PId);
-            // unlock(transactionId, "Items", "IId", IId);
+            unlock(transactionId, "Items", "IId", IId);
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
             if (player.isEmpty()) {
@@ -205,7 +245,7 @@ public class Client {
         return null;
     }
 
-    public String buyListingDeadlockDetect(String PId, String LId) {
+    public String buyListing(String PId, String LId) {
 
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
 
@@ -280,15 +320,24 @@ public class Client {
             }
 
 //          W into I where IId = Liid SET Iowner = pid
-            write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId);
+            if (!write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId)) {
+                rollback(transactionId);
+                return null;
+            }
 
 //           W into P where Pid SET pCash = new Cash
             String newCash = Double.toString(Double.parseDouble( player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
-            write(transactionId, "Players", "PId", PId, "Pcash", newCash);
+            if(!write(transactionId, "Players", "PId", PId, "Pcash", newCash)) {
+                rollback(transactionId);
+                return null;
+            }
 
 //           W into P where Pid SET pCash = new Cash
             String prevOwnerNewCash = Double.toString(Double.parseDouble( prevOwner.get("pcash")) + Double.parseDouble(listing.get("lprice")));
-            write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash);
+            if(!write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash)) {
+                rollback(transactionId);
+                return null;
+            }
 
 //            Unlock
             commit(transactionId);
@@ -368,9 +417,9 @@ public class Client {
 
 //          W into I where IId = Liid SET Iowner = pid
             write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId);
-            // unlock(transactionId, "Items", "IId", listing.get("liid"));
+            unlock(transactionId, "Items", "IId", listing.get("liid"));
 
-            delay(1000);
+//            delay(3000);
 //           W into P where Pid SET pCash = new Cash
             String newCash = Double.toString(Double.parseDouble( player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
             write(transactionId, "Players", "PId", PId, "Pcash", newCash);
@@ -424,10 +473,11 @@ public class Client {
     }
     private void commit(String transactionId) {
         Result commitResult = blockingStub.commitTransaction(TransactionId.newBuilder().setId(transactionId).build());
+        log.info("commit {}: {}, {}", transactionId, commitResult.getStatus(), commitResult.getMessage());
         locks.remove(transactionId);
     }
 
-    private void write(String transactionId, String tableName, String key, String value, String newKey, String newValue) {
+    private boolean write(String transactionId, String tableName, String key, String value, String newKey, String newValue) {
         Data writeData = Data.newBuilder()
                 .setTransactionId(transactionId)
                 .setType(WRITE_TYPE)
@@ -436,6 +486,7 @@ public class Client {
                 .build();
         Result writeResult = performRemoteOperation(writeData);
         log.info("Write to {} status: {}", tableName, writeResult.getStatus());
+        return writeResult.getStatus();
     }
 
     private void delete(String transactionId, String tableName, String key, String value) {
@@ -456,7 +507,7 @@ public class Client {
                 .build();
         Result readResult = performRemoteOperation(readData);
         log.info("read from {} status : {}", tableName, readResult.getStatus());
-        return convertStringToMap(readResult.getMessage());
+        return readResult.getStatus() ? convertStringToMap(readResult.getMessage()) : new HashMap<>();
     }
 
 
@@ -501,7 +552,7 @@ public class Client {
         return lockResult;
     }
 
-    private String insertLock(String transactionId, String tableName) {
+    private Result insertLock(String transactionId, String tableName) {
         Data lockData = Data.newBuilder()
                 .setTransactionId(transactionId)
                 .setType(INSERT_TYPE)
@@ -509,7 +560,7 @@ public class Client {
                 .build();
         Result lockResult = blockingStub.lock(lockData);
         log.info("lock on {} for insert status: {}", tableName, lockResult.getStatus());
-        return lockResult.getMessage();
+        return lockResult;
     }
 
     public static Map<String, String> convertStringToMap(String str) {

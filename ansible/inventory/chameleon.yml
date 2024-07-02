@@ -8,11 +8,11 @@ all:
 #            port: 8001
 #            discovery_ip: 10.52.0.16
 #            id: "1"
-          129.114.108.6:
+          129.114.108.226:
             ansible_user: "cc"
             ansible_connection: ssh
             port: 8001
-            discovery_ip: 10.52.3.41
+            discovery_ip: 10.52.3.89
             id: "1"
 
 
@@ -28,6 +28,6 @@ all:
 #
     prometheus:
       hosts:
-        129.114.108.6:
+        129.114.108.226:
           ansible_user: "cc"
           ansible_connection: ssh

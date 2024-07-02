@@ -19,7 +19,6 @@ import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.MutuallyExclusiveGroup;
 import net.sourceforge.argparse4j.inf.Namespace;
-import org.checkerframework.checker.units.qual.A;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -41,11 +40,9 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
-import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -283,10 +280,10 @@ public class Performance {
         if (res.getInt("maxThreads") != null)
             this.MAX_THREADS = res.getInt("maxThreads");
 
-        if (res.getInt("maxItemsThreads") != null)
+        if (res.getInt("maxItemsThreads") != null) {
             this.MAX_ITEM_READ_THREADS = res.getInt("maxItemsThreads");
-
-        this.MAX_THREADS -= this.MAX_ITEM_READ_THREADS;
+            this.MAX_THREADS -= this.MAX_ITEM_READ_THREADS;
+        }
 
         this.MAX_RETRY = res.getInt("maxRetry");
 //        connectToDataStore(address, port);
@@ -299,7 +296,6 @@ public class Performance {
 
 
         executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(MAX_THREADS);
-        itemExecutor = (ThreadPoolExecutor) Executors.newFixedThreadPool(MAX_ITEM_READ_THREADS);
 
 
         Thread.sleep(3000);
@@ -314,6 +310,7 @@ public class Performance {
         Integer numberOfItemsToRead = res.get("readItemNumber");
         Thread itemThread = null;
         if (numberOfItemsToRead > 0) {
+            itemExecutor = (ThreadPoolExecutor) Executors.newFixedThreadPool(MAX_ITEM_READ_THREADS);
             itemThread = Executors.defaultThreadFactory().newThread(() -> {
                 log.info("Item read thread has been created");
 
@@ -384,7 +381,8 @@ public class Performance {
         stats.printTotal();
         metricServer.close();
 
-        itemExecutor.shutdownNow();
+        if (itemExecutor != null)
+            itemExecutor.shutdownNow();
         if (itemThread != null) {
             itemThread.interrupt();
         }
@@ -471,7 +469,7 @@ public class Performance {
 
     private void executeRequestFromThreadPool(ServerRequest request, Stats stats) {
         stats.nextAdded(1);
-
+        log.info("submitting the request {}", request.getValues());
         submitRequest(request, stats);
         while (executor.getQueue().size() >= MAX_QUEUE_SIZE) {
             try {
@@ -530,8 +528,10 @@ public class Performance {
                     submitRetry(request, stats);
                 }
             }
-            if (success)
+            if (success) {
                 stats.nextCompletion(request.start, 1);
+                log.info("request successful {}", request.getValues());
+            }
             return null;
         });
     }
