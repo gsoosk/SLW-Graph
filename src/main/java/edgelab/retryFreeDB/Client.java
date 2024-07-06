@@ -72,13 +72,13 @@ public class Client {
         });
         delay();
 
-//        executor.submit(()->  {
-//            lock(tx1, "Players", "PId", "11");});
-//        delay();
+        executor.submit(()->  {
+            lock(tx1, "Players", "PId", "11");});
+        delay();
 
-        executor.submit(()-> rollback(tx1));
-//        commit(tx2);
-//        commit(tx1);
+//        executor.submit(()-> rollback(tx1));
+        commit(tx2);
+        commit(tx1);
 
     }
 

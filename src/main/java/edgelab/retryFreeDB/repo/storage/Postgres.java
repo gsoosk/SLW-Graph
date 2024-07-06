@@ -6,7 +6,6 @@ import edgelab.retryFreeDB.repo.storage.DTO.DBInsertData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBWriteData;
 import lombok.extern.slf4j.Slf4j;
 import org.postgresql.PGConnection;
-import org.postgresql.PGStatement;
 
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -34,7 +33,7 @@ public class Postgres implements Storage{
     private static final String user = "user";
     private static final String password = "password";
 
-    private static final long LOCK_THINKING_TIME = 5;
+    private static final long LOCK_THINKING_TIME = 0;
     private static final long OPERATION_THINKING_TIME = 5;
 
     private String partitionId;
@@ -233,10 +232,12 @@ public class Postgres implements Storage{
         this.partitionId = partitionId;
     }
     private final Map<String, DBLock> locks = new HashMap<>();
+    private final Set<String> abortedTransactions = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<String, Set<String>> transactionResources = new ConcurrentHashMap<>();
-    public void lock(String tx, Connection conn, Set<String> toBeAborted, DBData data) throws SQLException {
+    public void lock(String tx, Connection conn, Set<String> toBeAborted, DBData data) throws Exception {
         String resource = (data instanceof DBInsertData) ? data.getTable() +  ","  + ((DBInsertData) data).getRecordId() : data.getTable() +  ","  + data.getQuery();
         DBLock lock;
+        log.info("{}, try to lock {}",tx, resource);
         synchronized (locks) {
             lock = locks.getOrDefault(resource, new DBLock(resource));
             locks.put(resource, lock);
@@ -244,40 +245,63 @@ public class Postgres implements Storage{
         LockType lockType = LockType.WRITE; // TODO: Read lock
 
         synchronized (lock) {
+            log.info("START____________________________{},{}_____________________", tx, lock.getResource());
             if (!lock.canGrant(tx, lockType))
-                handleConflict(tx, lock);
+                handleConflict(tx, lock, toBeAborted);
+            log.info("{}, {}", tx, lock);
             while (!lock.canGrant(tx, lockType)) {
                 try {
                     log.info("{}: waiting for lock on {}", tx, resource);
                     lock.wait();
+                    if (abortedTransactions.contains(tx)) {
+                        log.error("Transaction is aborted. Could not lock");
+                        throw new Exception("Transaction aborted. can not lock");
+                    }
                     log.info("{}: wakes up to check the lock {}", tx, resource);
+
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
             }
             lock.grant(tx, lockType);
-            transactionResources.putIfAbsent(tx, new HashSet<>());
-            transactionResources.get(tx).add(resource);
+            addNewResourceForTransaction(tx, resource);
             log.info("{}: Lock granted on {} for {}", tx, resource, lockType);
+            log.info("END____________________________{},{}_____________________", tx, lock.getResource());
         }
 
         delay(LOCK_THINKING_TIME);
     }
 
-    private void handleConflict(String tx, DBLock lock) {
+    private void addNewResourceForTransaction(String tx, String resource) {
+        transactionResources.putIfAbsent(tx, new HashSet<>());
+        transactionResources.get(tx).add(resource);
+    }
+
+    private void handleConflict(String tx, DBLock lock, Set<String> toBeAborted) {
         synchronized (lock) {
-//            TODO: Wound Wait
-//            for (String t : lock.getHoldingTransactions()) {
-//                if (t.getTimestamp() > transaction.getTimestamp()) {
-//                    t.abort();
+//            TODO: Wound Wait;
+            log.info("previous holding transactons: {}", lock.getHoldingTransactions());
+            for (String t : lock.getHoldingTransactions()) {
+                if (Long.parseLong(t) > Long.parseLong(tx)) {
+//                    abort transaction t
+                    toBeAborted.add(t);
+                    abortedTransactions.add(t);
+                    releaseLock(t, lock);
+
+                    lock.addPending(tx);
+                    addNewResourceForTransaction(tx, lock.getResource());
+//                    unlockAll(t);
 //                    lock.release(t);
-//                    lock.grant(transaction, lock.getPendingType(transaction));
-//                    System.out.println("Wound-wait: " + t.getId() + " aborted, " + transaction.getId() + " granted lock on " + lock.getResource());
-//                    return;
-//                }
-//            }
+//                    transactionResources.get(t).remove(lock.getResource());
+
+                    log.info("{}: Wound-wait: {} aborted by {}",tx, t, tx);
+                    log.info("after holding transactons: {}", lock.getHoldingTransactions());
+                    return;
+                }
+            }
             log.info("{}: Transaction waits for lock on {}", tx, lock.getResource());
             lock.addPending(tx);
+            addNewResourceForTransaction(tx, lock.getResource());
         }
     }
 
@@ -403,27 +427,16 @@ public class Postgres implements Storage{
             lock = locks.get(resource);
         }
 
+        releaseLock(tx, lock);
+    }
+
+    private void releaseLock(String tx, DBLock lock) {
         if (lock != null) {
             synchronized (lock) {
                 lock.release(tx);
-                transactionResources.get(tx).remove(resource);
-                log.info("{}: Lock released  on {}", tx, resource);
+                transactionResources.get(tx).remove(lock.getResource());
+                log.info("{}: Lock released  on {}", tx, lock.getResource());
                 lock.notifyAll(); // Notify all waiting threads
-
-                // Try to grant lock to pending transactions TODO: read locks
-                // Try to grant lock to pending transactions in order of arrival
-//                while (!lock.getPendingTransactions().isEmpty()) {
-//                    String pendingTransaction = lock.getPendingTransactions().poll();
-//                    if (lock.canGrant(pendingTransaction, LockType.WRITE)) {
-//                        lock.grant(pendingTransaction, LockType.WRITE);
-//                        log.info("{}: Lock granted to {}  on {} ", tx, pendingTransaction, resource);
-//                        lock.notifyAll(); // Notify other waiting threads that might now be able to proceed
-//                        break; // Grant lock to one pending transaction at a time
-//                    } else {
-//                        lock.getPendingTransactions().offer(pendingTransaction);
-//                        break; // Stop if the next pending transaction cannot be granted the lock
-//                    }
-//                }
             }
         }
         else {

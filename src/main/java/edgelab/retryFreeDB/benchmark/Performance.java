@@ -486,7 +486,7 @@ public class Performance {
             boolean success = true;
 
             if (request.getType() == ServerRequest.Type.BUY) {
-                String newItem = client.buyListingSLW(request.getValues().get("PId"), request.getValues().get("LId"));
+                String newItem = client.buyListing(request.getValues().get("PId"), request.getValues().get("LId"));
                 if (newItem == null) {
                     success = false;
                     log.error("Unsuccessful buy {}", request.getValues());
@@ -494,7 +494,7 @@ public class Performance {
                 }
             }
             else if (request.getType() == ServerRequest.Type.SELL) {
-                String newListing = client.addListingSLW(request.getValues().get("PId"), request.getValues().get("IId"), 1);
+                String newListing = client.addListing(request.getValues().get("PId"), request.getValues().get("IId"), 1);
                 if (newListing == null) {
                     success = false;
                     log.error("Unsuccessful sell {}", request.getValues());
@@ -503,7 +503,7 @@ public class Performance {
             }
 
             else if (request.getType() == ServerRequest.Type.BUY_HOT) {
-                String newItem = client.buyListingSLW(request.getValues().get("PId"), request.getValues().get("LId"));
+                String newItem = client.buyListing(request.getValues().get("PId"), request.getValues().get("LId"));
                 if (newItem != null) {
                     hotPlayersAndItems.get(request.getValues().get("PId")).add(newItem);
                 }
@@ -516,7 +516,7 @@ public class Performance {
                 }
             }
             else if (request.getType() == ServerRequest.Type.SELL_HOT) {
-                String newListing = client.addListingSLW(request.getValues().get("PId"), request.getValues().get("IId"), 1);
+                String newListing = client.addListing(request.getValues().get("PId"), request.getValues().get("IId"), 1);
                 if (newListing != null) {
                     hotListings.put(newListing, List.of(request.getValues().get("IId"), "1"));
                 }

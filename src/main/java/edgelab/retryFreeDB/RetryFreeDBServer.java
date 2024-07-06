@@ -19,9 +19,11 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -64,6 +66,8 @@ public class RetryFreeDBServer {
     public static class RetryFreeDBService extends RetryFreeDBServerGrpc.RetryFreeDBServerImplBase {
         private final Postgres repo;
         ConcurrentHashMap<String, Connection> transactions;
+//        Bamboo:
+        Set<String> toBeAbortedTransactions = ConcurrentHashMap.newKeySet();
         ConcurrentHashMap<String, AtomicInteger> lastIdUsed = new ConcurrentHashMap<>();
         private final AtomicLong lastTransactionId;
         public RetryFreeDBService(String postgresAddress, String postgresPort, String[] tables) throws SQLException {
@@ -76,6 +80,9 @@ public class RetryFreeDBServer {
                 lastIdUsed.put(table, new AtomicInteger(repo.lastId(table)));
             }
             log.info("Table metadata initialization finished");
+
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            executor.submit(this::abortTransactionsThatNeedsToBeAborted);
 
         }
 
@@ -110,25 +117,25 @@ public class RetryFreeDBServer {
 
         @Override
         public void lock(Data request, StreamObserver<Result> responseObserver) {
-            if (checkTransactionExists(request.getTransactionId(), responseObserver)) return;
+            if (isTransactionInvalid(request.getTransactionId(), responseObserver)) return;
 
             Connection conn = transactions.get(request.getTransactionId());
             DBData d = deserilizeDataToDBData(request);
 
             if (d != null) {
                 try {
-                    repo.lock(request.getTransactionId(), conn, d);
+                    repo.lock(request.getTransactionId(), conn, toBeAbortedTransactions, d);
                     if (d instanceof DBInsertData)
                         responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(((DBInsertData) d).getRecordId()).build());
                     else
                         responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
                     responseObserver.onCompleted();
-                } catch (SQLException e) {
-                    if (e.getSQLState().equals(Postgres.DEADLOCK_ERROR)) {
-                        responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("deadlock").build());
-                    }
-                    else
-                        responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not lock").build());
+                } catch (Exception e) {
+//                    if (e.getSQLState().equals(Postgres.DEADLOCK_ERROR)) {
+//                        responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("deadlock").build());
+//                    }
+//                    else
+                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not lock").build());
                     responseObserver.onCompleted();
                 }
             }
@@ -136,14 +143,14 @@ public class RetryFreeDBServer {
         }
         @Override
         public void unlock(Data request, StreamObserver<Result> responseObserver) {
-            if (checkTransactionExists(request.getTransactionId(), responseObserver)) return;
+            if (isTransactionInvalid(request.getTransactionId(), responseObserver)) return;
 
             Connection conn = transactions.get(request.getTransactionId());
             DBData d = deserilizeDataToDBData(request);
 
             if (d != null) {
                 try {
-                    repo.unlock(request.getTransactionId(), conn, d);
+                    repo.unlock(request.getTransactionId(), transactions, d);
                     if (d instanceof DBInsertData)
                         responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(((DBInsertData) d).getRecordId()).build());
                     else
@@ -158,18 +165,18 @@ public class RetryFreeDBServer {
 
         @Override
         public void lockAndUpdate(Data request, StreamObserver<Result> responseObserver) {
-            if (checkTransactionExists(request.getTransactionId(), responseObserver)) return;
+            if (isTransactionInvalid(request.getTransactionId(), responseObserver)) return;
 
             Connection conn = transactions.get(request.getTransactionId());
             DBData d = deserilizeDataToDBData(request);
 
             if (d != null) {
                 try {
-                    repo.lock(request.getTransactionId(), conn, d);
-                } catch (SQLException e) {
-                    if (e.getSQLState().equals(Postgres.DEADLOCK_ERROR))
-                        responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("deadlock").build());
-                    else
+                    repo.lock(request.getTransactionId(), conn, toBeAbortedTransactions, d);
+                } catch (Exception e) {
+//                    if (e.getSQLState().equals(Postgres.DEADLOCK_ERROR))
+//                        responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("deadlock").build());
+//                    else
                         responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not lock").build());
                     responseObserver.onCompleted();
                     return;
@@ -185,7 +192,7 @@ public class RetryFreeDBServer {
 
         @Override
         public void update(Data request, StreamObserver<Result> responseObserver) {
-            if (checkTransactionExists(request.getTransactionId(), responseObserver)) return;
+            if (isTransactionInvalid(request.getTransactionId(), responseObserver)) return;
 
             Connection conn = transactions.get(request.getTransactionId());
             DBData d = deserilizeDataToDBData(request);
@@ -219,23 +226,72 @@ public class RetryFreeDBServer {
             }
         }
 
-        private boolean checkTransactionExists(String request, StreamObserver<Result> responseObserver) {
-            if (!transactions.containsKey(request)) {
-                responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("no transaction with this id").build());
+        private boolean isTransactionInvalid(String request, StreamObserver<Result> responseObserver) {
+            if (!checkTransactionExists(request, responseObserver))
+                return true;
+            else return checkTransactionAlreadyAborted(request, responseObserver);
+        }
+
+        private void abortTransactionsThatNeedsToBeAborted() {
+            while(true) {
+                if (toBeAbortedTransactions.isEmpty()) {
+//                    log.info("waiting");
+                    try {
+                        Thread.sleep(1);
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                } else {
+                    for (String tx : toBeAbortedTransactions) {
+                        log.info("{}: needs to be aborted Try to abort.", tx);
+                        Connection conn = transactions.get(tx);
+                        try {
+                            repo.rollback(tx, conn);
+                            transactions.remove(tx);
+                            log.warn("{}, Transaciton rollbacked", tx);
+                        } catch (Exception e) {
+                            log.error("Could not abort the transaction {}:{}", tx, e);
+                        }
+                        toBeAbortedTransactions.remove(tx);
+                    }
+                }
+            }
+        }
+        private boolean checkTransactionAlreadyAborted(String tx, StreamObserver<Result> responseObserver) {
+//            if (toBeAbortedTransactions.contains(tx)) {
+//                log.info("{}: tx is wounded before. Try to abort.", tx);
+//                rollBackTransactionWithoutInitialCheck(tx, responseObserver, false);
+//                toBeAbortedTransactions.remove(tx);
+//                return true;
+//            }
+
+            if (!repo.isValid(transactions.get(tx)) || toBeAbortedTransactions.contains(tx)) {
+                log.info("{}: Transaction already aborted", tx);
+                responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("transaction already aborted").build());
                 responseObserver.onCompleted();
                 return true;
             }
             return false;
         }
 
+        private boolean checkTransactionExists(String request, StreamObserver<Result> responseObserver) {
+            if (!transactions.containsKey(request)) {
+                log.info("{}: No transaction with this id exists!", request);
+                responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("no transaction with this id").build());
+                responseObserver.onCompleted();
+                return false;
+            }
+            return true;
+        }
+
 
         @Override
         public void commitTransaction(TransactionId transactionId, StreamObserver<Result> responseObserver) {
-            if (checkTransactionExists(transactionId.getId(), responseObserver)) return;
+            if (isTransactionInvalid(transactionId.getId(), responseObserver)) return;
 
             Connection conn = transactions.get(transactionId.getId());
             try {
-                repo.release(conn);
+                repo.release(transactionId.getId(), conn);
                 transactions.remove(transactionId.getId());
                 log.warn("{}, Transaciton commited", transactionId.getId());
                 responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("released").build());
@@ -249,21 +305,25 @@ public class RetryFreeDBServer {
 
         @Override
         public void rollBackTransaction(TransactionId transactionId, StreamObserver<Result> responseObserver) {
-            if (checkTransactionExists(transactionId.getId(), responseObserver)) return;
+            if (isTransactionInvalid(transactionId.getId(), responseObserver)) return;
 
-            Connection conn = transactions.get(transactionId.getId());
+            rollBackTransactionWithoutInitialCheck(transactionId.getId(), responseObserver, true);
+        }
+
+        private void rollBackTransactionWithoutInitialCheck(String tx, StreamObserver<Result> responseObserver, boolean finalStatus) {
+            Connection conn = transactions.get(tx);
             try {
-                repo.rollback(conn);
-                transactions.remove(transactionId.getId());
-                log.warn("{}, Transaciton rollbacked", transactionId.getId());
-                responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("rollbacked").build());
+                repo.rollback(tx, conn);
+                transactions.remove(tx);
+                log.warn("{}, Transaciton rollbacked", tx);
+                responseObserver.onNext(Result.newBuilder().setStatus(finalStatus).setMessage("rollbacked").build());
                 responseObserver.onCompleted();
             } catch (SQLException e) {
+
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not rollback and release the locks").build());
                 responseObserver.onCompleted();
             }
         }
-
 
 
 //
