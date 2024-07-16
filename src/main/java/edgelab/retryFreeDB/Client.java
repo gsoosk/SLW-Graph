@@ -56,29 +56,39 @@ public class Client {
     private void test() {
         String tx1 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
         String tx2 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
+        String tx3 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
 
         ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(5);
-        executor.submit(()->  {lock(tx1, "Players", "PId", "10");
-            lock(tx1,"Players", "PId", "9" );
+        executor.submit(()->  {lock(tx2, "Players", "PId", "10");
+            lock(tx3, "Players", "PId", "10", READ_TYPE);
+            lock(tx2,"Players", "PId", "10" , WRITE_TYPE);
+
+
         });
         delay();
 
-        executor.submit(()->  lock(tx2, "Players", "PId", "11"));
-        delay();
-
-        executor.submit(()->  {
-            lock(tx2, "Players", "PId", "10");
-            log.info("{} now can access 10", tx2);
-        });
-        delay();
-
-        executor.submit(()->  {
-            lock(tx1, "Players", "PId", "11");});
-        delay();
+        executor.submit(() -> unlock(tx3,"Players", "PId", "10"));
+//        executor.submit(()->  lock(tx2, "Players", "PId", "11", WRITE_TYPE));
+//        delay();
+//
+//        executor.submit(()->  {
+//            lock(tx2, "Players", "PId", "10", READ_TYPE);
+//            log.info("{} now can access 10", tx2);
+//            log.info("{} value of player 10: {}", tx2, read(tx2, "Players", "PId", "10"));
+//        });
+//        delay();
+//
+//        executor.submit(()->  {
+//            lock(tx1, "Players", "PId", "11", READ_TYPE);
+//            log.info("{} now can access 11", tx1);
+////            lock(tx1, )
+//
+//        });
+//        delay();
 
 //        executor.submit(()-> rollback(tx1));
-        commit(tx2);
-        commit(tx1);
+//        commit(tx2);
+//        commit(tx1);
 
     }
 
@@ -162,7 +172,7 @@ public class Client {
 //                return;
 //            }
 
-            if (!lock(transactionId, "Items", "IId", IId).getStatus()) {
+            if (!lock(transactionId, "Items", "IId", IId, READ_TYPE).getStatus()) {
                 rollback(transactionId);
                 return null;
             }
@@ -179,7 +189,7 @@ public class Client {
                 return null;
             }
 
-            if (!lock(transactionId, "Players", "PId", PId).getStatus()) {
+            if (!lock(transactionId, "Players", "PId", PId, READ_TYPE).getStatus()) {
                 rollback(transactionId);
                 return null;
             }
@@ -253,7 +263,7 @@ public class Client {
             String transactionId = initResult.getMessage();
 
         //            R from L where Lid
-            if (!lock(transactionId, "Listings", "LId", LId).getStatus()) {
+            if (!lock(transactionId, "Listings", "LId", LId, READ_TYPE).getStatus()) {
                 rollback(transactionId);
                 return null;
             }
@@ -266,7 +276,7 @@ public class Client {
             }
 
             //            Read from P where pid
-            if(!lock(transactionId, "Players", "PId", PId).getStatus()) {
+            if(!lock(transactionId, "Players", "PId", PId, READ_TYPE).getStatus()) {
                 rollback(transactionId);
                 return null;
             }
@@ -288,7 +298,7 @@ public class Client {
 
 
 //            Read from I where LIID
-            if (!lock(transactionId, "Items", "IId", listing.get("liid")).getStatus()) {
+            if (!lock(transactionId, "Items", "IId", listing.get("liid"), READ_TYPE).getStatus()) {
                 rollback(transactionId);
                 return null;
             }
@@ -302,12 +312,16 @@ public class Client {
 
 
 //            Delete from L where LID
+            if (!lock(transactionId, "Listings", "LId", LId, WRITE_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
             delete(transactionId, "Listings", "LId", LId);
 
 
 //            R from P where ppid
             String PPId =  item.get("iowner");
-            if (!lock(transactionId, "Players", "PId", PPId).getStatus()) {
+            if (!lock(transactionId, "Players", "PId", PPId, READ_TYPE).getStatus()) {
                 rollback(transactionId);
                 return null;
             }
@@ -320,12 +334,20 @@ public class Client {
             }
 
 //          W into I where IId = Liid SET Iowner = pid
+            if (!lock(transactionId, "Items", "IId", listing.get("liid"), WRITE_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
             if (!write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId)) {
                 rollback(transactionId);
                 return null;
             }
 
 //           W into P where Pid SET pCash = new Cash
+            if (!lock(transactionId, "Players", "PId", PId, WRITE_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
             String newCash = Double.toString(Double.parseDouble( player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
             if(!write(transactionId, "Players", "PId", PId, "Pcash", newCash)) {
                 rollback(transactionId);
@@ -333,6 +355,10 @@ public class Client {
             }
 
 //           W into P where Pid SET pCash = new Cash
+            if (!lock(transactionId, "Players", "PId", PPId, WRITE_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
             String prevOwnerNewCash = Double.toString(Double.parseDouble( prevOwner.get("pcash")) + Double.parseDouble(listing.get("lprice")));
             if(!write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash)) {
                 rollback(transactionId);
@@ -533,11 +559,28 @@ public class Client {
         Result result = blockingStub.lockAndUpdate(insertData);
         log.info("insert data with into {} status : {}", tableName, result.getStatus());
     }
+    private Result lock(String transactionId, String tableName, String key, String value, String type) {
+        Data lockData = Data.newBuilder()
+                .setTransactionId(transactionId)
+                .setType(type)
+                .setKey(tableName + "," + key + "," + value)
+                .build();
+        Result lockResult = blockingStub.lock(lockData);
+        log.info("{}, lock on {},{}:{} status: {} - message: {}",transactionId, tableName, key, value, lockResult.getStatus(), lockResult.getMessage());
+        if (locks.containsKey(transactionId)) {
+            locks.get(transactionId).add(lockData.getKey());
+        }
+        else {
+            locks.put(transactionId, new HashSet<>());
+            locks.get(transactionId).add(lockData.getKey());
+        }
+        return lockResult;
+    }
 
     private Result lock(String transactionId, String tableName, String key, String value) {
         Data lockData = Data.newBuilder()
                 .setTransactionId(transactionId)
-                .setType(READ_TYPE)
+                .setType(WRITE_TYPE)
                 .setKey(tableName + "," + key + "," + value)
                 .build();
         Result lockResult = blockingStub.lock(lockData);

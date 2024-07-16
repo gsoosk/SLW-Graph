@@ -68,9 +68,11 @@ public class DBTransaction {
         }
 
         if (d instanceof DBWriteData) {
-            String[] writeKeys = data.getValue().split(",");
-            ((DBWriteData) d).setVariable(writeKeys[0]);
-            ((DBWriteData) d).setValue(writeKeys[1]);
+            if (!data.getValue().equals(null) && !data.getValue().equals("")) {
+                String[] writeKeys = data.getValue().split(",");
+                ((DBWriteData) d).setVariable(writeKeys[0]);
+                ((DBWriteData) d).setValue(writeKeys[1]);
+            }
         }
         else if (d instanceof DBInsertData) {
             ((DBInsertData) d).setNewRecord(data.getValue());

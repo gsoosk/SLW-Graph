@@ -124,7 +124,7 @@ public class RetryFreeDBServer {
 
             if (d != null) {
                 try {
-                    repo.lock(request.getTransactionId(), conn, toBeAbortedTransactions, d);
+                    repo.lock(request.getTransactionId(),  toBeAbortedTransactions, d);
                     if (d instanceof DBInsertData)
                         responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(((DBInsertData) d).getRecordId()).build());
                     else
@@ -145,7 +145,6 @@ public class RetryFreeDBServer {
         public void unlock(Data request, StreamObserver<Result> responseObserver) {
             if (isTransactionInvalid(request.getTransactionId(), responseObserver)) return;
 
-            Connection conn = transactions.get(request.getTransactionId());
             DBData d = deserilizeDataToDBData(request);
 
             if (d != null) {
@@ -163,6 +162,25 @@ public class RetryFreeDBServer {
             }
         }
 
+
+        @Override
+        public void retireLock(Data request, StreamObserver<Result> responseObserver) {
+            if (isTransactionInvalid(request.getTransactionId(), responseObserver)) return;
+
+            DBData d = deserilizeDataToDBData(request);
+            if (d != null) {
+
+                try {
+                    repo.retireLock(request.getTransactionId(), d);
+                } catch (Exception e) {
+                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not retire").build());
+                    responseObserver.onCompleted();
+                    return;
+                }
+            }
+
+
+        }
         @Override
         public void lockAndUpdate(Data request, StreamObserver<Result> responseObserver) {
             if (isTransactionInvalid(request.getTransactionId(), responseObserver)) return;
@@ -172,7 +190,7 @@ public class RetryFreeDBServer {
 
             if (d != null) {
                 try {
-                    repo.lock(request.getTransactionId(), conn, toBeAbortedTransactions, d);
+                    repo.lock(request.getTransactionId(), toBeAbortedTransactions, d);
                 } catch (Exception e) {
 //                    if (e.getSQLState().equals(Postgres.DEADLOCK_ERROR))
 //                        responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("deadlock").build());

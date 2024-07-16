@@ -15,11 +15,8 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,7 +25,10 @@ import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
 public class Postgres implements Storage{
-    public static final String DEADLOCK_ERROR = "40P01";
+    private static final String DEADLOCK_ERROR = "40P01";
+    private static boolean WOUND_WAIT_ENABLE = true;
+    private static boolean BAMBOO_ENABLE = false;
+    private static boolean SHARED_LOCK_ENABLE = true;
     private static String url = "";
     private static final String user = "user";
     private static final String password = "password";
@@ -43,13 +43,6 @@ public class Postgres implements Storage{
         return resourceLocks.computeIfAbsent(resource, k -> new ReentrantLock());
     }
 
-
-//    Wound-Wait lists : Resource: List <Owners|Waiters|Retired(for bamboo)>
-//    Assumption: All the locks are exclusive
-    private ConcurrentHashMap<String, List<String>> owners = new ConcurrentHashMap<>();
-    private ConcurrentHashMap<String, List<String>> waiters = new ConcurrentHashMap<>();
-    private ConcurrentHashMap<String, List<String>> retired = new ConcurrentHashMap<>();
-    private ConcurrentHashMap<String, Set<String>> txResources = new ConcurrentHashMap<>();
 
     public Postgres(String addr, String port) {
         url = "jdbc:postgresql://" + addr + ":" + port + "/postgres";
@@ -234,20 +227,23 @@ public class Postgres implements Storage{
     private final Map<String, DBLock> locks = new HashMap<>();
     private final Set<String> abortedTransactions = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<String, Set<String>> transactionResources = new ConcurrentHashMap<>();
-    public void lock(String tx, Connection conn, Set<String> toBeAborted, DBData data) throws Exception {
+    public void lock(String tx, Set<String> toBeAborted, DBData data) throws Exception {
         String resource = (data instanceof DBInsertData) ? data.getTable() +  ","  + ((DBInsertData) data).getRecordId() : data.getTable() +  ","  + data.getQuery();
         DBLock lock;
+        LockType lockType = LockType.WRITE;
+        if (SHARED_LOCK_ENABLE)
+            lockType = (!(data instanceof DBWriteData) && !(data instanceof DBInsertData) && !(data instanceof DBDeleteData)) ? LockType.READ : LockType.WRITE;
+
         log.info("{}, try to lock {}",tx, resource);
         synchronized (locks) {
             lock = locks.getOrDefault(resource, new DBLock(resource));
             locks.put(resource, lock);
         }
-        LockType lockType = LockType.WRITE; // TODO: Read lock
+
 
         synchronized (lock) {
-            log.info("START____________________________{},{}_____________________", tx, lock.getResource());
             if (!lock.canGrant(tx, lockType))
-                handleConflict(tx, lock, toBeAborted);
+                handleConflict(tx, lockType, lock, toBeAborted);
             log.info("{}, {}", tx, lock);
             while (!lock.canGrant(tx, lockType)) {
                 try {
@@ -266,7 +262,6 @@ public class Postgres implements Storage{
             lock.grant(tx, lockType);
             addNewResourceForTransaction(tx, resource);
             log.info("{}: Lock granted on {} for {}", tx, resource, lockType);
-            log.info("END____________________________{},{}_____________________", tx, lock.getResource());
         }
 
         delay(LOCK_THINKING_TIME);
@@ -277,31 +272,35 @@ public class Postgres implements Storage{
         transactionResources.get(tx).add(resource);
     }
 
-    private void handleConflict(String tx, DBLock lock, Set<String> toBeAborted) {
+    private void handleConflict(String tx, LockType lockType, DBLock lock, Set<String> toBeAborted) {
         synchronized (lock) {
-//            TODO: Wound Wait;
-            log.info("previous holding transactons: {}", lock.getHoldingTransactions());
-            for (String t : lock.getHoldingTransactions()) {
-                if (Long.parseLong(t) > Long.parseLong(tx)) {
+            if (WOUND_WAIT_ENABLE) {
+                log.info("previous holding transactons: {}", lock.getHoldingTransactions());
+                for (String t : lock.getHoldingTransactions()) {
+                    if (lock.conflict(t, tx, lockType) && Long.parseLong(t) > Long.parseLong(tx)) {
 //                    abort transaction t
-                    toBeAborted.add(t);
-                    abortedTransactions.add(t);
-                    releaseLock(t, lock);
+                        toBeAborted.add(t);
+                        abortedTransactions.add(t);
+                        releaseLock(t, lock);
 
-                    lock.addPending(tx);
-                    addNewResourceForTransaction(tx, lock.getResource());
+
 //                    unlockAll(t);
 //                    lock.release(t);
 //                    transactionResources.get(t).remove(lock.getResource());
 
-                    log.info("{}: Wound-wait: {} aborted by {}",tx, t, tx);
-                    log.info("after holding transactons: {}", lock.getHoldingTransactions());
-                    return;
+                        log.info("{}: Wound-wait: {} aborted by {}", tx, t, tx);
+                        log.info("after holding transactons: {}", lock.getHoldingTransactions());
+//                        return;
+                    }
                 }
+                lock.addPending(tx, lockType);
+                addNewResourceForTransaction(tx, lock.getResource());
             }
-            log.info("{}: Transaction waits for lock on {}", tx, lock.getResource());
-            lock.addPending(tx);
-            addNewResourceForTransaction(tx, lock.getResource());
+            else {
+                log.info("{}: Transaction waits for lock on {}", tx, lock.getResource());
+                lock.addPending(tx, lockType);
+                addNewResourceForTransaction(tx, lock.getResource());
+            }
         }
     }
 
@@ -313,7 +312,6 @@ public class Postgres implements Storage{
 //
 //        String s = (data instanceof DBInsertData) ? data.getTable() +  ","  + ((DBInsertData) data).getRecordId() : data.getTable() +  ","  + data.getQuery();
 //        getLock(s + "+1").lock();
-//        bambooWound(tx, s, toBeAborted);
 ////      Assumption: Only lock based on the primary key
 //
 //        getLock(s + "+1").unlock();
@@ -343,37 +341,10 @@ public class Postgres implements Storage{
 //            getAdvisoryLock(conn, data.getTable(), Integer.parseInt (((DBInsertData) data).getRecordId()));
 //        }
 //
-//        bambooPromoteWaiter(tx, s);
 //        getLock(s + "+2").unlock();
 //    }
 
 
-    private void bambooPromoteWaiter(String tx, String s) {
-
-        this.owners.get(s).add(tx);
-        this.waiters.get(s).remove(tx);
-        this.txResources.get(tx).add(s);
-
-        log.info("Bamboo: {} is now the owner of {}", tx, s);
-    }
-
-    private void bambooWound(String tx, String resource, Set<String> toBeAborted) {
-        this.txResources.putIfAbsent(tx, ConcurrentHashMap.newKeySet());
-        this.owners.putIfAbsent(resource, Collections.synchronizedList(new ArrayList<>()));
-        this.waiters.putIfAbsent(resource, Collections.synchronizedList(new ArrayList<>()));
-
-        if (!this.owners.get(resource).isEmpty()) {
-            if (Long.parseLong(tx) < Long.parseLong(this.owners.get(resource).get(0))) {
-                log.info("Bamboo: wound younger transaction <{} wounds {}>", tx, this.owners.get(resource).get(0));
-//                wound the younger: abort ownersList.get(0)
-                toBeAborted.add(this.owners.get(resource).get(0));
-            }
-        }
-
-        this.waiters.get(resource).add(tx);
-
-
-    }
 
     private void delay(long duration) {
         try {
@@ -396,7 +367,6 @@ public class Postgres implements Storage{
     }
 
     private  void unlockAllAdvisoryLocks(String tx, Connection conn) throws SQLException {
-        bambooReleaseAllLocks(tx);
         String lockSQL = "SELECT pg_advisory_unlock_all()";
         try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
             updateStmt.executeQuery();
@@ -408,13 +378,6 @@ public class Postgres implements Storage{
 
     }
 
-    private void bambooReleaseAllLocks(String tx) {
-        for (String s : this.txResources.get(tx)) {
-            bambooReleaseLock(tx, s);
-        }
-        txResources.remove(tx);
-        log.info("Bamboo: all resources for transaction {} was released", tx);
-    }
 
     public void unlock(String tx, ConcurrentHashMap<String, Connection> transactions, DBData data) throws SQLException {
         String resource = (data instanceof DBInsertData) ? data.getTable() +  ","  + ((DBInsertData) data).getRecordId() : data.getTable() +  ","  + data.getQuery();
@@ -453,6 +416,38 @@ public class Postgres implements Storage{
         }
     }
 
+    public void retireLock(String tx, DBData data) throws Exception {
+        if (!BAMBOO_ENABLE)
+            throw new Exception("Bamboo is not enabled!");
+
+
+        String resource = (data instanceof DBInsertData) ? data.getTable() +  ","  + ((DBInsertData) data).getRecordId() : data.getTable() +  ","  + data.getQuery();
+        DBLock lock;
+
+        log.info("{}, retiring the lock {}", tx, resource);
+        synchronized (locks) {
+            lock = locks.getOrDefault(resource, new DBLock(resource));
+            locks.put(resource, lock);
+        }
+
+        if (lock != null) {
+            synchronized (lock) {
+//                lock.release(tx);
+                lock.retire(tx);
+
+                transactionResources.get(tx).remove(lock.getResource());
+                log.info("{}: Lock released  on {}", tx, lock.getResource());
+                lock.notifyAll(); // Notify all waiting threads
+            }
+        }
+        else {
+            log.error("{}, Lock was not held to be retired!", tx);
+        }
+
+
+
+    }
+
 //
 //    public void unlock(String tx, ConcurrentHashMap<String, Connection> transactions, DBData data) throws SQLException {
 //        bambooReleaseLock(tx, data.getTable() + "," + data.getQuery());
@@ -460,16 +455,6 @@ public class Postgres implements Storage{
 //    }
 
 
-
-    private void bambooReleaseLock(String tx, String s) {
-        if (owners.get(s).isEmpty())
-            log.error("Lock was not held to be released!");
-        else {
-            owners.get(s).remove(0);
-            txResources.get(tx).remove(s);
-            log.info("Bamboo: resource {} for transaction {} was released: owners: {}", s, tx, owners.get(s));
-        }
-    }
 
     private static void unlockAdvisory(Connection conn, String tableName, Integer id) throws SQLException {
         String lockSQL = "SELECT pg_advisory_unlock('" + tableName + "'::regclass::integer, ?)";
@@ -631,6 +616,8 @@ public class Postgres implements Storage{
             return false;
         }
     }
+
+
 }
 
 

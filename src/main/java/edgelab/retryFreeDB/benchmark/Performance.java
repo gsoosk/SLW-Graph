@@ -4,6 +4,7 @@ package edgelab.retryFreeDB.benchmark;
 
 import edgelab.proto.RetryFreeDBServerGrpc;
 import edgelab.retryFreeDB.Client;
+import edgelab.retryFreeDB.repo.storage.Postgres;
 import io.grpc.ConnectivityState;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
