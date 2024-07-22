@@ -242,21 +242,29 @@ public class Postgres implements Storage{
 
 
         synchronized (lock) {
-            if (!lock.canGrant(tx, lockType))
-                handleConflict(tx, lockType, lock, toBeAborted);
-            log.info("{}, {}", tx, lock);
-            while (!lock.canGrant(tx, lockType)) {
-                try {
-                    log.info("{}: waiting for lock on {}", tx, resource);
-                    lock.wait();
-                    if (abortedTransactions.contains(tx)) {
-                        log.error("Transaction is aborted. Could not lock");
-                        throw new Exception("Transaction aborted. can not lock");
-                    }
-                    log.info("{}: wakes up to check the lock {}", tx, resource);
 
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+            if (!lock.isHeldBefore(tx, lockType)) {
+
+                handleConflict(tx, lockType, lock, toBeAborted);
+
+
+                lock.addPending(tx, lockType);
+                addNewResourceForTransaction(tx, lock.getResource());
+
+                while (!lock.canGrant(tx, lockType)) {
+                    try {
+
+                        log.info("{}: waiting for lock on {}", tx, resource);
+                        lock.wait();
+                        if (abortedTransactions.contains(tx)) {
+                            log.error("Transaction is aborted. Could not lock");
+                            throw new Exception("Transaction aborted. can not lock");
+                        }
+                        log.info("{}: wakes up to check the lock {}", tx, resource);
+
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
                 }
             }
             lock.grant(tx, lockType);
@@ -275,9 +283,16 @@ public class Postgres implements Storage{
     private void handleConflict(String tx, LockType lockType, DBLock lock, Set<String> toBeAborted) {
         synchronized (lock) {
             if (WOUND_WAIT_ENABLE) {
+                boolean hasConflict = false;
                 log.info("previous holding transactons: {}", lock.getHoldingTransactions());
+//                log.info("previous pending transactons: {}", lock.printPendingLocks());
                 for (String t : lock.getHoldingTransactions()) {
-                    if (lock.conflict(t, tx, lockType) && Long.parseLong(t) > Long.parseLong(tx)) {
+                    if (lock.conflict(t, tx, lockType)) {
+                        hasConflict = true;
+                        log.info("{}: conflict detected {}", tx, t);
+                    }
+
+                    if (hasConflict && Long.parseLong(t) > Long.parseLong(tx)) {
 //                    abort transaction t
                         toBeAborted.add(t);
                         abortedTransactions.add(t);
@@ -293,13 +308,6 @@ public class Postgres implements Storage{
 //                        return;
                     }
                 }
-                lock.addPending(tx, lockType);
-                addNewResourceForTransaction(tx, lock.getResource());
-            }
-            else {
-                log.info("{}: Transaction waits for lock on {}", tx, lock.getResource());
-                lock.addPending(tx, lockType);
-                addNewResourceForTransaction(tx, lock.getResource());
             }
         }
     }
@@ -437,7 +445,7 @@ public class Postgres implements Storage{
 
                 transactionResources.get(tx).remove(lock.getResource());
                 log.info("{}: Lock released  on {}", tx, lock.getResource());
-                lock.notifyAll(); // Notify all waiting threads
+                lock.notifyAll(); // Notify all waiting threads, aka promoteWaiters
             }
         }
         else {

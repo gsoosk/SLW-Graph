@@ -18,7 +18,7 @@ class DBLock {
     private final String resource;
     private final Set<String> holdingTransactions;
     private final Map<String, LockType> transactionLockTypes;
-//    private final Set<String> retiredTransactions;
+    private final Queue<String> retiredTransactions;
     private final Queue<String> pendingTransactions;
     private final Map<String, LockType> pendingLockTypes;
 
@@ -35,6 +35,7 @@ class DBLock {
                     return Long.compare(Long.parseLong(s1) ,Long.parseLong(s2));
                 }
             });
+            this.retiredTransactions = new LinkedList<>();
         }
         else
             this.pendingTransactions = new LinkedList<>();
@@ -43,7 +44,7 @@ class DBLock {
     }
 
     public synchronized boolean canGrant(String transaction, LockType lockType) {
-        if (holdingTransactions.contains(transaction) && transactionLockTypes.get(transaction) == lockType)
+        if (isHeldBefore(transaction, lockType))
             return true;
 
 
@@ -64,7 +65,7 @@ class DBLock {
                 if (value.equals(transaction)) {
                     return true; // Reached the target value without finding any write values
                 }
-                if (pendingLockTypes.get(transaction).equals(LockType.WRITE)) {
+                if (pendingLockTypes.get(value).equals(LockType.WRITE)) {
                     return false;
                 }
             }
@@ -103,8 +104,7 @@ class DBLock {
     public void retire(String transaction) {
 //         TODO
         holdingTransactions.remove(transaction);
-
-//        retiredTransactions.add(transaction);
+        retiredTransactions.add(transaction);
     }
 
     public String getResource() {
@@ -127,6 +127,20 @@ class DBLock {
         }
     }
 
+    public boolean isHeldBefore(String transaction, LockType lockType) {
+        return holdingTransactions.contains(transaction) && transactionLockTypes.get(transaction) == lockType;
+    }
+
+    public String printPendingLocks() {
+        StringBuilder s = new StringBuilder();
+        s.append("[ ");
+        for (String p : pendingTransactions) {
+            s.append(p).append(":").append(pendingLockTypes.get(p));
+            s.append(", ");
+        }
+        s.append("]");
+        return s.toString();
+    }
 }
 
 enum LockType {
