@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.locks.Lock;
 
 class DBLock {
     @Override
@@ -16,12 +17,13 @@ class DBLock {
     }
 
     private final String resource;
-    private final Set<String> holdingTransactions;
+    private final Set<DBTransaction> holdingTransactions;
 //    private final Map<String, LockType> transactionLockTypes;
     private LockType ownersLockType;
-    private final Queue<String> retiredTransactions;
-    private final Queue<String> pendingTransactions;
-    private final Map<String, LockType> pendingLockTypes;
+    private final Queue<DBTransaction> retiredTransactions;
+    private final Map<DBTransaction, LockType> retiredLockTypes;
+    private final Queue<DBTransaction> pendingTransactions;
+    private final Map<DBTransaction, LockType> pendingLockTypes;
 
 
     private static final boolean BAMBOO_ENABLE = true;
@@ -30,13 +32,19 @@ class DBLock {
         this.resource = resource;
         this.holdingTransactions = new HashSet<>();
         if (BAMBOO_ENABLE) {
-            this.pendingTransactions = new PriorityQueue<>(new Comparator<String>() {
+            this.pendingTransactions = new PriorityQueue<>(new Comparator<DBTransaction>() {
                 @Override
-                public int compare(String s1, String s2) {
-                    return Long.compare(Long.parseLong(s1) ,Long.parseLong(s2));
+                public int compare(DBTransaction s1, DBTransaction s2) {
+                    return Long.compare(Long.parseLong(s1.getTimestamp()) ,Long.parseLong(s2.getTimestamp()));
                 }
             });
-            this.retiredTransactions = new LinkedList<>();
+            this.retiredTransactions =  new PriorityQueue<>(new Comparator<DBTransaction>() {
+                @Override
+                public int compare(DBTransaction s1, DBTransaction s2) {
+                    return Long.compare(Long.parseLong(s1.getTimestamp()) ,Long.parseLong(s2.getTimestamp()));
+                }
+            });
+            this.retiredLockTypes = new HashMap<>();
         }
         else
             this.pendingTransactions = new LinkedList<>();
@@ -44,7 +52,7 @@ class DBLock {
         this.pendingLockTypes = new HashMap<>();
     }
 
-    public synchronized boolean canGrant(String transaction, LockType lockType) {
+    public synchronized boolean canGrant(DBTransaction transaction, LockType lockType) {
         if (isHeldBefore(transaction, lockType))
             return true;
 
@@ -60,7 +68,7 @@ class DBLock {
             if (ownersLockType == LockType.WRITE)
                 return false;
             // Can grant read lock if no pending write lock is ahead
-            for (String value : pendingTransactions) {
+            for (DBTransaction value : pendingTransactions) {
                 if (value.equals(transaction)) {
                     return true; // Reached the target value without finding any write values
                 }
@@ -79,7 +87,7 @@ class DBLock {
 
     public synchronized void promoteWaiters() {
         while (!pendingTransactions.isEmpty()) {
-            String t = pendingTransactions.peek();
+            DBTransaction t = pendingTransactions.peek();
 
 //            if (!isHeldBefore(t, pendingLockTypes.get(t))) // if pending is already taken
 //                if (!holdingTransactions.isEmpty()) // no one holding
@@ -91,10 +99,20 @@ class DBLock {
                 grant(t, pendingLockTypes.get(t));
             else
                 break;
+
+
+            if (BAMBOO_ENABLE) {
+                for (DBTransaction tp : retiredTransactions) {
+                    if (conflict(retiredLockTypes.get(tp), pendingLockTypes.get(t))) {
+//                        t.commit_semaphore++;
+                        break;
+                    }
+                }
+            }
         }
     }
 
-    public synchronized boolean conflict(String holdingTransaction, String transaction, LockType lockType) {
+    public synchronized boolean conflict(DBTransaction holdingTransaction, DBTransaction transaction, LockType lockType) {
         if (holdingTransaction.equals(transaction))
             return false;
         return lockType == LockType.WRITE || ownersLockType == LockType.WRITE;
@@ -107,37 +125,43 @@ class DBLock {
 
 
 
-    public synchronized void grant(String transaction, LockType lockType) {
+    public synchronized void grant(DBTransaction transaction, LockType lockType) {
         pendingTransactions.remove(transaction);
         pendingLockTypes.remove(transaction);
         holdingTransactions.add(transaction);
         ownersLockType = lockType;
     }
 
-    public synchronized void release(String transaction) {
+    public synchronized void release(DBTransaction transaction) {
         holdingTransactions.remove(transaction);
-        ownersLockType = null;
+        if (holdingTransactions.isEmpty())
+            ownersLockType = null;
         pendingTransactions.remove(transaction);
         pendingLockTypes.remove(transaction);
     }
 
 
-    public void retire(String transaction) {
+    public void retire(DBTransaction transaction) {
 //         TODO
         holdingTransactions.remove(transaction);
         retiredTransactions.add(transaction);
+        retiredLockTypes.put(transaction, ownersLockType);
+        if (holdingTransactions.isEmpty())
+            ownersLockType = null;
+
+
     }
 
     public String getResource() {
         return resource;
     }
 
-    public synchronized Set<String> getHoldingTransactions() {
+    public synchronized Set<DBTransaction> getHoldingTransactions() {
         return new HashSet<>(holdingTransactions);
     }
 
 
-    public synchronized void addPending(String transaction, LockType lockType) {
+    public synchronized void addPending(DBTransaction transaction, LockType lockType) {
         if (!pendingTransactions.contains(transaction)) {
             pendingTransactions.offer(transaction);
             pendingLockTypes.put(transaction, lockType);
@@ -149,20 +173,14 @@ class DBLock {
     }
 
 
-
-
-    private boolean isUpgradeCase(String transaction) {
-        return holdingTransactions.size() == 1 && holdingTransactions.contains(transaction);
-    }
-
-    public boolean isHeldBefore(String transaction, LockType lockType) {
+    public boolean isHeldBefore(DBTransaction transaction, LockType lockType) {
         return holdingTransactions.contains(transaction) && ownersLockType == lockType;
     }
 
     public String printPendingLocks() {
         StringBuilder s = new StringBuilder();
         s.append("[ ");
-        for (String p : pendingTransactions) {
+        for (DBTransaction p : pendingTransactions) {
             s.append(p).append(":").append(pendingLockTypes.get(p));
             s.append(", ");
         }

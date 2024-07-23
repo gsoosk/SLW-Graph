@@ -6,7 +6,6 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 
 import static edgelab.retryFreeDB.RetryFreeDBConfiguration.DELETE_TYPE;
@@ -14,18 +13,18 @@ import static edgelab.retryFreeDB.RetryFreeDBConfiguration.INSERT_TYPE;
 import static edgelab.retryFreeDB.RetryFreeDBConfiguration.WRITE_TYPE;
 
 @Slf4j
-public class DBTransaction {
+public class DBTransactionData {
 
 
     @Setter
     @Getter
     private List<DBData> dataList;
 
-    public DBTransaction(List<DBData> dList) {
+    public DBTransactionData(List<DBData> dList) {
         dataList = dList;
     }
 
-    public static DBTransaction deserialize(Transaction transaction) {
+    public static DBTransactionData deserialize(Transaction transaction) {
         List<DBData> dList = new ArrayList<>();
 
         for (edgelab.proto.Data data:
@@ -36,7 +35,7 @@ public class DBTransaction {
             }
 
         }
-        return new DBTransaction(dList);
+        return new DBTransactionData(dList);
     }
 
     public static DBData deserializeData(edgelab.proto.Data data) {
