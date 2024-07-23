@@ -234,7 +234,7 @@ public class Postgres implements Storage{
         if (SHARED_LOCK_ENABLE)
             lockType = (!(data instanceof DBWriteData) && !(data instanceof DBInsertData) && !(data instanceof DBDeleteData)) ? LockType.READ : LockType.WRITE;
 
-        log.info("{}, try to lock {}",tx, resource);
+        log.info("{}, try to lock {}, <{}>",tx, resource, lockType);
         synchronized (locks) {
             lock = locks.getOrDefault(resource, new DBLock(resource));
             locks.put(resource, lock);
@@ -251,7 +251,11 @@ public class Postgres implements Storage{
                 lock.addPending(tx, lockType);
                 addNewResourceForTransaction(tx, lock.getResource());
 
-                while (!lock.canGrant(tx, lockType)) {
+
+                lock.promoteWaiters();
+                lock.notifyAll();
+
+                while (!lock.isHeldBefore(tx, lockType)) {
                     try {
 
                         log.info("{}: waiting for lock on {}", tx, resource);
@@ -267,7 +271,6 @@ public class Postgres implements Storage{
                     }
                 }
             }
-            lock.grant(tx, lockType);
             addNewResourceForTransaction(tx, resource);
             log.info("{}: Lock granted on {} for {}", tx, resource, lockType);
         }
@@ -285,7 +288,7 @@ public class Postgres implements Storage{
             if (WOUND_WAIT_ENABLE) {
                 boolean hasConflict = false;
                 log.info("previous holding transactons: {}", lock.getHoldingTransactions());
-//                log.info("previous pending transactons: {}", lock.printPendingLocks());
+                log.info("previous pending transactons: {}", lock.printPendingLocks());
                 for (String t : lock.getHoldingTransactions()) {
                     if (lock.conflict(t, tx, lockType)) {
                         hasConflict = true;
@@ -296,7 +299,7 @@ public class Postgres implements Storage{
 //                    abort transaction t
                         toBeAborted.add(t);
                         abortedTransactions.add(t);
-                        releaseLock(t, lock);
+//                        releaseLockWithoutPromotion(t, lock);
 
 
 //                    unlockAll(t);
@@ -398,16 +401,19 @@ public class Postgres implements Storage{
             lock = locks.get(resource);
         }
 
-        releaseLock(tx, lock);
+        releaseLockWithoutPromotion(tx, lock);
+        synchronized (lock) {
+            lock.promoteWaiters();
+            lock.notifyAll(); // Notify all waiting threads
+        }
     }
 
-    private void releaseLock(String tx, DBLock lock) {
+    private void releaseLockWithoutPromotion(String tx, DBLock lock) {
         if (lock != null) {
             synchronized (lock) {
                 lock.release(tx);
                 transactionResources.get(tx).remove(lock.getResource());
                 log.info("{}: Lock released  on {}", tx, lock.getResource());
-                lock.notifyAll(); // Notify all waiting threads
             }
         }
         else {

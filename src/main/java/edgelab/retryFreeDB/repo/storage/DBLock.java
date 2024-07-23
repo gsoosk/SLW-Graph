@@ -17,7 +17,8 @@ class DBLock {
 
     private final String resource;
     private final Set<String> holdingTransactions;
-    private final Map<String, LockType> transactionLockTypes;
+//    private final Map<String, LockType> transactionLockTypes;
+    private LockType ownersLockType;
     private final Queue<String> retiredTransactions;
     private final Queue<String> pendingTransactions;
     private final Map<String, LockType> pendingLockTypes;
@@ -39,7 +40,7 @@ class DBLock {
         }
         else
             this.pendingTransactions = new LinkedList<>();
-        this.transactionLockTypes = new HashMap<>();
+        this.ownersLockType = null;
         this.pendingLockTypes = new HashMap<>();
     }
 
@@ -56,10 +57,8 @@ class DBLock {
         }
         else {
             // Can grant read lock if no write lock is held
-            for (String t : holdingTransactions) {
-                if (transactionLockTypes.get(t) == LockType.WRITE)
-                    return false;
-            }
+            if (ownersLockType == LockType.WRITE)
+                return false;
             // Can grant read lock if no pending write lock is ahead
             for (String value : pendingTransactions) {
                 if (value.equals(transaction)) {
@@ -78,10 +77,32 @@ class DBLock {
     }
 
 
+    public synchronized void promoteWaiters() {
+        while (!pendingTransactions.isEmpty()) {
+            String t = pendingTransactions.peek();
+
+//            if (!isHeldBefore(t, pendingLockTypes.get(t))) // if pending is already taken
+//                if (!holdingTransactions.isEmpty()) // no one holding
+//                    if (!isUpgradeCase(t)) // same tx has the read lock
+//                        if (conflict(pendingLockTypes.get(t), ownersLockType))
+//                            break;
+//
+            if (canGrant(t, pendingLockTypes.get(t)))
+                grant(t, pendingLockTypes.get(t));
+            else
+                break;
+        }
+    }
+
     public synchronized boolean conflict(String holdingTransaction, String transaction, LockType lockType) {
         if (holdingTransaction.equals(transaction))
             return false;
-        return lockType == LockType.WRITE || transactionLockTypes.get(holdingTransaction) == LockType.WRITE;
+        return lockType == LockType.WRITE || ownersLockType == LockType.WRITE;
+    }
+
+
+    public synchronized boolean conflict(LockType lockType, LockType lockType2) {
+        return lockType == LockType.WRITE || lockType2 == LockType.WRITE;
     }
 
 
@@ -90,12 +111,12 @@ class DBLock {
         pendingTransactions.remove(transaction);
         pendingLockTypes.remove(transaction);
         holdingTransactions.add(transaction);
-        transactionLockTypes.put(transaction, lockType);
+        ownersLockType = lockType;
     }
 
     public synchronized void release(String transaction) {
         holdingTransactions.remove(transaction);
-        transactionLockTypes.remove(transaction);
+        ownersLockType = null;
         pendingTransactions.remove(transaction);
         pendingLockTypes.remove(transaction);
     }
@@ -127,8 +148,15 @@ class DBLock {
         }
     }
 
+
+
+
+    private boolean isUpgradeCase(String transaction) {
+        return holdingTransactions.size() == 1 && holdingTransactions.contains(transaction);
+    }
+
     public boolean isHeldBefore(String transaction, LockType lockType) {
-        return holdingTransactions.contains(transaction) && transactionLockTypes.get(transaction) == lockType;
+        return holdingTransactions.contains(transaction) && ownersLockType == lockType;
     }
 
     public String printPendingLocks() {
@@ -141,6 +169,7 @@ class DBLock {
         s.append("]");
         return s.toString();
     }
+
 }
 
 enum LockType {
