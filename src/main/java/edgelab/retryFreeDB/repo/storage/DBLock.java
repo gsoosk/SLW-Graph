@@ -1,5 +1,7 @@
 package edgelab.retryFreeDB.repo.storage;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -10,6 +12,7 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.locks.Lock;
 
+@Slf4j
 class DBLock {
     @Override
     public String toString() {
@@ -31,23 +34,19 @@ class DBLock {
     public DBLock(String resource) {
         this.resource = resource;
         this.holdingTransactions = new HashSet<>();
-        if (BAMBOO_ENABLE) {
-            this.pendingTransactions = new PriorityQueue<>(new Comparator<DBTransaction>() {
-                @Override
-                public int compare(DBTransaction s1, DBTransaction s2) {
-                    return Long.compare(Long.parseLong(s1.getTimestamp()) ,Long.parseLong(s2.getTimestamp()));
-                }
-            });
-            this.retiredTransactions =  new PriorityQueue<>(new Comparator<DBTransaction>() {
-                @Override
-                public int compare(DBTransaction s1, DBTransaction s2) {
-                    return Long.compare(Long.parseLong(s1.getTimestamp()) ,Long.parseLong(s2.getTimestamp()));
-                }
-            });
-            this.retiredLockTypes = new HashMap<>();
-        }
-        else
-            this.pendingTransactions = new LinkedList<>();
+        this.retiredTransactions =  new PriorityQueue<>(new Comparator<DBTransaction>() {
+            @Override
+            public int compare(DBTransaction s1, DBTransaction s2) {
+                return Long.compare(Long.parseLong(s1.getTimestamp()) ,Long.parseLong(s2.getTimestamp()));
+            }
+        });
+        this.retiredLockTypes = new HashMap<>();
+        this.pendingTransactions = new PriorityQueue<>(new Comparator<DBTransaction>() {
+            @Override
+            public int compare(DBTransaction s1, DBTransaction s2) {
+                return Long.compare(Long.parseLong(s1.getTimestamp()) ,Long.parseLong(s2.getTimestamp()));
+            }
+        });
         this.ownersLockType = null;
         this.pendingLockTypes = new HashMap<>();
     }
@@ -88,6 +87,7 @@ class DBLock {
     public synchronized void promoteWaiters() {
         while (!pendingTransactions.isEmpty()) {
             DBTransaction t = pendingTransactions.peek();
+            LockType lockType = pendingLockTypes.get(t);
 
 //            if (!isHeldBefore(t, pendingLockTypes.get(t))) // if pending is already taken
 //                if (!holdingTransactions.isEmpty()) // no one holding
@@ -95,16 +95,19 @@ class DBLock {
 //                        if (conflict(pendingLockTypes.get(t), ownersLockType))
 //                            break;
 //
-            if (canGrant(t, pendingLockTypes.get(t)))
+            if (canGrant(t, pendingLockTypes.get(t))) {
+                log.info("promoting transaction {}", t.toString());
                 grant(t, pendingLockTypes.get(t));
+            }
             else
                 break;
 
 
             if (BAMBOO_ENABLE) {
                 for (DBTransaction tp : retiredTransactions) {
-                    if (conflict(retiredLockTypes.get(tp), pendingLockTypes.get(t))) {
-//                        t.commit_semaphore++;
+                    if (conflict(retiredLockTypes.get(tp), lockType)) {
+                        log.info("commit semaphore increased for transaction {}", t);
+                        t.incCommitSemaphore();
                         break;
                     }
                 }
@@ -136,8 +139,14 @@ class DBLock {
         holdingTransactions.remove(transaction);
         if (holdingTransactions.isEmpty())
             ownersLockType = null;
+
+
         pendingTransactions.remove(transaction);
         pendingLockTypes.remove(transaction);
+
+
+        retiredTransactions.remove(transaction);
+        retiredLockTypes.remove(transaction);
     }
 
 
@@ -158,6 +167,10 @@ class DBLock {
 
     public synchronized Set<DBTransaction> getHoldingTransactions() {
         return new HashSet<>(holdingTransactions);
+    }
+
+    public synchronized Set<DBTransaction> getRetiredTransactions() {
+        return new HashSet<>(retiredTransactions);
     }
 
 
@@ -188,6 +201,36 @@ class DBLock {
         return s.toString();
     }
 
+    public LockType getAllOwnerType(DBTransaction tx) {
+        if (holdingTransactions.contains(tx))
+            return ownersLockType;
+        return retiredLockTypes.get(tx);
+    }
+
+    public boolean isHeadOfRetried(DBTransaction tx) {
+        if (retiredTransactions.isEmpty())
+            return false;
+        return retiredTransactions.peek().equals(tx);
+    }
+
+    public boolean conflictWithRetriedHead(LockType txTupleType) {
+        if (retiredTransactions.isEmpty())
+            return false;
+        return conflict(txTupleType, retiredLockTypes.get(retiredTransactions.peek()));
+    }
+
+    public DBTransaction getRetiredHead() {
+        return retiredTransactions.peek();
+    }
+
+    public boolean isRetiredEmpty() {
+        return retiredTransactions.isEmpty();
+    }
+
+    public void releasePending(DBTransaction transaction) {
+        pendingTransactions.remove(transaction);
+        pendingLockTypes.remove(transaction);
+    }
 }
 
 enum LockType {

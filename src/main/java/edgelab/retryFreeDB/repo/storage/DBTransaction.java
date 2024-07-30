@@ -3,25 +3,27 @@ package edgelab.retryFreeDB.repo.storage;
 import lombok.Getter;
 
 import java.sql.Connection;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class DBTransaction {
     @Getter
     private String timestamp;
+    @Getter
     private boolean abort = false;
     @Getter
     private Connection connection;
 
     @Getter
     private final Set<String> resources = ConcurrentHashMap.newKeySet();
+    private final AtomicInteger commitSemaphore;
     public DBTransaction(String timestamp,Connection connection) {
 
         this.timestamp = timestamp;
         this.abort = false;
         this.connection = connection;
+        commitSemaphore = new AtomicInteger(0);
     }
 
     @Override
@@ -45,4 +47,30 @@ public class DBTransaction {
     public void removeResource(String resource) {
         resources.remove(resource);
     }
+
+    public void incCommitSemaphore() {
+        commitSemaphore.incrementAndGet();
+    }
+    public void decCommitSemaphore() {
+        commitSemaphore.decrementAndGet();
+    }
+
+    public Long getTimestampValue() {
+        return Long.parseLong(timestamp);
+    }
+
+
+    private boolean canCommit() {
+        return commitSemaphore.get() == 0;
+    }
+
+    public void waitForCommit() throws Exception {
+        while (!this.canCommit()) {
+            if (isAbort())
+                throw new Exception("transaction already aborted");
+            Thread.sleep(1);
+
+        }
+    }
+
 }

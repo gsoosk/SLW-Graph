@@ -137,6 +137,7 @@ public class RetryFreeDBServer {
 //                        responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("deadlock").build());
 //                    }
 //                    else
+                    log.error(e.getMessage());
                     responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not lock").build());
                     responseObserver.onCompleted();
                 }
@@ -151,7 +152,7 @@ public class RetryFreeDBServer {
             DBData d = deserilizeDataToDBData(request);
             if (d != null) {
                 try {
-                    repo.unlock(tx, d);
+                    repo.unlock(tx, d, toBeAbortedTransactions);
                     if (d instanceof DBInsertData)
                         responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(((DBInsertData) d).getRecordId()).build());
                     else
@@ -165,27 +166,7 @@ public class RetryFreeDBServer {
         }
 
 
-        @Override
-        public void retireLock(Data request, StreamObserver<Result> responseObserver) {
-            if (isTransactionInvalid(request.getTransactionId(), responseObserver)) return;
 
-            DBTransaction tx = transactions.get(request.getTransactionId());
-            DBData d = deserilizeDataToDBData(request);
-            if (d != null) {
-
-                try {
-                    repo.retireLock(tx, d);
-                    responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
-                    responseObserver.onCompleted();
-                } catch (Exception e) {
-                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not retire").build());
-                    responseObserver.onCompleted();
-                    return;
-                }
-            }
-
-
-        }
         @Override
         public void lockAndUpdate(Data request, StreamObserver<Result> responseObserver) {
             if (isTransactionInvalid(request.getTransactionId(), responseObserver)) return;
@@ -265,11 +246,13 @@ public class RetryFreeDBServer {
                         throw new RuntimeException(e);
                     }
                 } else {
+
                     for (DBTransaction tx : toBeAbortedTransactions) {
                         log.info("{}: needs to be aborted Try to abort.", tx);
+                        log.info("abort size: {}", toBeAbortedTransactions.size());
                         Connection conn = tx.getConnection();
                         try {
-                            repo.rollback(tx);
+                            repo.rollback(tx, toBeAbortedTransactions);
                             transactions.remove(tx);
                             log.warn("{}, Transaciton rollbacked", tx);
                         } catch (Exception e) {
@@ -314,7 +297,7 @@ public class RetryFreeDBServer {
 
             DBTransaction tx = transactions.get(transactionId.getId());
             try {
-                repo.release(tx);
+                repo.release(tx, toBeAbortedTransactions);
                 transactions.remove(transactionId.getId());
                 log.warn("{}, Transaciton commited", transactionId.getId());
                 responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("released").build());
@@ -336,7 +319,7 @@ public class RetryFreeDBServer {
         private void rollBackTransactionWithoutInitialCheck(String transactionId, StreamObserver<Result> responseObserver, boolean finalStatus) {
             DBTransaction tx = transactions.get(transactionId);
             try {
-                repo.rollback(tx);
+                repo.rollback(tx, toBeAbortedTransactions);
                 transactions.remove(tx);
                 log.warn("{}, Transaciton rollbacked", tx);
                 responseObserver.onNext(Result.newBuilder().setStatus(finalStatus).setMessage("rollbacked").build());
@@ -348,6 +331,44 @@ public class RetryFreeDBServer {
             }
         }
 
+
+        @Override
+        public void bambooRetireLock(Data request, StreamObserver<Result> responseObserver) {
+            if (isTransactionInvalid(request.getTransactionId(), responseObserver)) return;
+
+            DBTransaction tx = transactions.get(request.getTransactionId());
+            DBData d = deserilizeDataToDBData(request);
+            if (d != null) {
+
+                try {
+                    repo.retireLock(tx, d);
+                    responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
+                    responseObserver.onCompleted();
+                } catch (Exception e) {
+                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not retire").build());
+                    responseObserver.onCompleted();
+                    return;
+                }
+            }
+
+
+        }
+        @Override
+        public void bambooWaitForCommit(TransactionId transactionId, StreamObserver<Result> responseObserver) {
+            if (isTransactionInvalid(transactionId.getId(), responseObserver)) return;
+
+            DBTransaction tx = transactions.get(transactionId.getId());
+            try {
+                tx.waitForCommit();
+                responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
+                responseObserver.onCompleted();
+            } catch (Exception e) {
+                responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Error:" + e.getMessage()).build());
+                responseObserver.onCompleted();
+            }
+
+
+        }
 
 //
 //        @Override

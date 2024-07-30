@@ -12,6 +12,10 @@ service RetryFreeDBServer {
   rpc Update(Data) returns (Result) {}
   rpc CommitTransaction (TransactionId) returns (Result){}
   rpc RollBackTransaction (TransactionId) returns (Result){}
+
+//  Bamboo
+  rpc BambooRetireLock(Data) returns (Result) {}
+  rpc BambooWaitForCommit(TransactionId) returns (Result) {}
 }
 
 message Transaction {

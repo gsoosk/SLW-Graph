@@ -57,17 +57,47 @@ public class Client {
         String tx1 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
         String tx2 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
         String tx3 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
+        String tx4 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
+        String tx5 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
+        String tx6 = blockingStub.beginTransaction(Empty.newBuilder().build()).getMessage();
 
         ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(5);
-        executor.submit(()->  {lock(tx2, "Players", "PId", "10");
-            lock(tx3, "Players", "PId", "10", READ_TYPE);
-            lock(tx2,"Players", "PId", "10" , WRITE_TYPE);
+        executor.submit(()->  {
+//            lock(tx3, "Players", "PId", "10", WRITE_TYPE);
+//            retireLock(tx3, "Players", "PId", "10");
+
+            lock(tx5, "Players", "PId", "10", WRITE_TYPE);
+            retireLock(tx5, "Players", "PId", "10");
+
+            lock(tx6, "Players", "PId", "10", WRITE_TYPE);
+            retireLock(tx6, "Players", "PId", "10");
+
+
+            lock(tx4, "Players", "PId", "10", WRITE_TYPE);
 
 
         });
         delay();
 
-        executor.submit(() -> unlock(tx3,"Players", "PId", "10"));
+        executor.submit(() -> {
+            waitForCommit(tx5);
+            commit(tx5);
+        });
+
+        executor.submit(() -> {
+            waitForCommit(tx4);
+            commit(tx4);
+        });
+
+        executor.submit(() -> {
+            waitForCommit(tx3);
+            commit(tx3);
+        });
+
+        executor.submit(() -> {
+            waitForCommit(tx6);
+            commit(tx6);
+        });
 //        executor.submit(()->  lock(tx2, "Players", "PId", "11", WRITE_TYPE));
 //        delay();
 //
@@ -108,6 +138,7 @@ public class Client {
                 Map<String, String> item = read(tx, "Items", "IId", IId);
             }
 
+            waitForCommit(tx);
             commit(tx);
         }
     }
@@ -215,6 +246,218 @@ public class Client {
         return null;
     }
 
+
+    //    remoteCalls : 4
+    public String addListingBamboo(String PId, String IId, double price) {
+
+        Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
+        if (initResult.getStatus()) {
+            String transactionId = initResult.getMessage();
+//
+//            Map<String, String> listing = read(transactionId, "Listings", "LIId", IId);
+////            Check no listing exists with the item id
+//            if (!listing.isEmpty()) {
+//                log.info("listing exists");
+//                commit(transactionId);
+//                return;
+//            }
+
+            if (!lock(transactionId, "Items", "IId", IId, READ_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+            Map<String, String> item = read(transactionId, "Items", "IId", IId);
+            if (item.isEmpty()) {
+                log.info("Item does not exists!");
+                commit(transactionId);
+                return null;
+            }
+//             Check the owner
+            if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
+                log.info("item has a different owner! {}<>{}", item.get("iowner"), PId);
+                commit(transactionId);
+                return null;
+            }
+
+
+            if (!lock(transactionId, "Players", "PId", PId, READ_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+            Map<String, String> player = read(transactionId, "Players", "PId", PId);
+//            Check player exists
+            if (player.isEmpty()) {
+                log.info("player does not exists!");
+                commit(transactionId);
+                return null;
+            }
+
+            Result insertListingResult = insertLock(transactionId, "Listings");
+            if (!insertListingResult.getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+            String listingRecordId = insertListingResult.getMessage();
+            insert(transactionId, "Listings",  IId + "," + price, listingRecordId);
+//
+            if (!waitForCommit(transactionId).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+
+            commit(transactionId);
+            return listingRecordId;
+        }
+
+        return null;
+    }
+
+
+
+    public String buyListingBamboo(String PId, String LId) {
+
+        Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
+
+        if (initResult.getStatus()) {
+            String transactionId = initResult.getMessage();
+
+            //            R from L where Lid
+            if (!lock(transactionId, "Listings", "LId", LId, READ_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+            Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
+//            Check player exists
+            if (listing.isEmpty()) {
+                log.info("listing does not exists!");
+                commit(transactionId);
+                return null;
+            }
+
+            //            Read from P where pid
+            if (!lock(transactionId, "Players", "PId", PId, READ_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+//            TODO: WE MIGHT NEED TO ROLLBACK
+            Map<String, String> player = read(transactionId, "Players", "PId", PId);
+//            Check player exists
+            if (player.isEmpty()) {
+                log.info("player does not exists!");
+                commit(transactionId);
+                return null;
+            }
+
+            //            Check players cash for listing
+            if (Double.parseDouble(player.get("pcash")) < Double.parseDouble(listing.get("lprice"))) {
+                log.info("player does not have enough cash");
+                commit(transactionId);
+                return null;
+            }
+
+
+//            Read from I where LIID
+            if (!lock(transactionId, "Items", "IId", listing.get("liid"), READ_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+            Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
+            //            Check item exists
+            if (item.isEmpty()) {
+                log.info("item does not exists!");
+                commit(transactionId);
+                return null;
+            }
+
+
+//            Delete from L where LID
+            if (!lock(transactionId, "Listings", "LId", LId, WRITE_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+            delete(transactionId, "Listings", "LId", LId);
+
+
+//            R from P where ppid
+            String PPId = item.get("iowner");
+            if (!lock(transactionId, "Players", "PId", PPId, READ_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+            Map<String, String> prevOwner = read(transactionId, "Players", "PId", PPId);
+            //            Check prevOwner exists
+            if (prevOwner.isEmpty()) {
+                log.info("previous owner does not exists!");
+                commit(transactionId);
+                return null;
+            }
+
+//          W into I where IId = Liid SET Iowner = pid
+            if (!lock(transactionId, "Items", "IId", listing.get("liid"), WRITE_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+            if (!write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId)) {
+                rollback(transactionId);
+                return null;
+            }
+
+            if (!retireLock(transactionId, "Items", "IId", listing.get("liid")).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+
+//           W into P where Pid SET pCash = new Cash
+            if (!lock(transactionId, "Players", "PId", PId, WRITE_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+            String newCash = Double.toString(Double.parseDouble(player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
+            if (!write(transactionId, "Players", "PId", PId, "Pcash", newCash)) {
+                rollback(transactionId);
+                return null;
+            }
+
+//           W into P where Pid SET pCash = new Cash
+            if (!lock(transactionId, "Players", "PId", PPId, WRITE_TYPE).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+            String prevOwnerNewCash = Double.toString(Double.parseDouble(prevOwner.get("pcash")) + Double.parseDouble(listing.get("lprice")));
+            if (!write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash)) {
+                rollback(transactionId);
+                return null;
+            }
+
+
+            if (!waitForCommit(transactionId).getStatus()) {
+                rollback(transactionId);
+                return null;
+            }
+
+//            Unlock
+            commit(transactionId);
+            return listing.get("liid");
+        }
+        return null;
+    }
+
+    private Result waitForCommit(String transactionId) {
+        Result result = blockingStub.bambooWaitForCommit(TransactionId.newBuilder().setId(transactionId).build());
+        log.info("{}, waitForCommit status: {} - message: {}",transactionId, result.getStatus(), result.getMessage());
+        return result;
+    }
+
+    private Result retireLock(String transactionId, String tableName, String key, String value) {
+        Data lockData = Data.newBuilder()
+                .setTransactionId(transactionId)
+                .setType(WRITE_TYPE)
+                .setKey(tableName + "," + key + "," + value)
+                .build();
+        Result retireResult = blockingStub.bambooRetireLock(lockData);
+        log.info("{}, retire the lock {},{}:{} status: {} - message: {}",transactionId, tableName, key, value, retireResult.getStatus(), retireResult.getMessage());
+        return retireResult;
+    }
     private void rollback(String transactionId) {
         Result rollbackRes = blockingStub.rollBackTransaction(TransactionId.newBuilder().setId(transactionId).build());
         locks.remove(transactionId);
