@@ -1,0 +1,40 @@
+- name: Create target directory
+  file:
+    path: postgres
+    state: directory
+    mode: 0755
+
+
+- name: copy sql maker file to remote
+  copy:
+    src: "../../../scripts/initSqlMaker.py"
+    dest: "./postgres"
+
+- name: copy hot record selector file to remote
+  copy:
+    src: "../../../scripts/hotRecordsSelector.py"
+    dest: "./postgres"
+
+- name: copy Dockerfile
+  copy:
+    src: "../../../Dockerfile"
+    dest: "./postgres"
+
+- name: install requirements
+  pip:
+    name: tqdm
+
+- name: run initSqlMaker
+  command: "python3 initSqlMaker.py"
+  args:
+    chdir: 'postgres'
+
+- name: build docker file
+  command: 'docker build -t postgres_slw:init . --no-cache'
+  args:
+    chdir: 'postgres'
+
+- name: run hot record selector
+  command: "python3 hotRecordsSelector.py"
+  args:
+    chdir: 'postgres'

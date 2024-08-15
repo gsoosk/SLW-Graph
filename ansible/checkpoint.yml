@@ -1,0 +1,27 @@
+
+- name: Create a db checkpoint on the server
+  hosts:
+    - servers
+  become: yes
+
+  tasks:
+    - include_role:
+        name: build
+        tasks_from: run_checkpoint_initializer.yml
+      vars:
+        jar: RocksDBCheckpointInitializer
+        size: 6000
+
+- name: Create payload on benchmark server
+  hosts:
+    - benchmark
+  become: yes
+
+  tasks:
+    - name: create payload
+      shell:
+        cmd: "for i in {1..10000}; do tr -dc A-Za-z0-9 </dev/urandom | head -c 255 >> payload.txt; echo -n ',' >> payload.txt; done"
+        chdir: 'rocksdb'
+      become: yes
+      args:
+        executable: /bin/bash

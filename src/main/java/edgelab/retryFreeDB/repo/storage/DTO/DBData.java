@@ -7,6 +7,5 @@ public class DBData {
     private String table;
     private String id;
     private Integer query;
-
 }
 

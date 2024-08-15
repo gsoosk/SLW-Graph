@@ -1,0 +1,53 @@
+- name: Build server files
+  hosts:
+    - localhost
+  tasks:
+    - include_role:
+        name: build
+        tasks_from: build_server.yml
+
+- name: Create docker image
+  hosts:
+    - servers
+
+  tasks:
+    - include_role:
+        name: build
+        tasks_from: docker_container.yml
+
+- name: Copy jar to servers
+  hosts:
+    - servers
+  become: yes
+
+  tasks:
+    - include_role:
+        name: build
+        tasks_from: copy_jar.yml
+      vars:
+        jar: Client
+
+    - include_role:
+        name: build
+        tasks_from: copy_jar.yml
+      vars:
+        jar: Server
+
+#    - include_role:
+#        name: build
+#        tasks_from: copy_jar.yml
+#      vars:
+#        jar: RocksDBServer
+
+#
+#- name: Copy jar to benchmark
+#  hosts:
+#    - benchmark
+#  become: yes
+#
+#  tasks:
+#    - include_role:
+#        name: build
+#        tasks_from: copy_jar.yml
+#      vars:
+#        jar: RocksDBBenchmark

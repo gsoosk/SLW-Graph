@@ -5,15 +5,17 @@ option java_multiple_files = true;
 
 
 service RetryFreeDBServer {
-//  rpc Put(Data) returns (Result) {}
-//  rpc Get(Key) returns (Result) {}
-//  rpc Delete(Key) returns (Result) {}
-//  rpc Clear(Partition) returns (Result) {}
-//  rpc Batch(Values) returns (Result) {}
-//  rpc ChangeMemory(Size) returns (Result) {}
   rpc BeginTransaction(Empty) returns (Result) {}
+  rpc Lock(Data) returns (Result) {}
+  rpc LockAndUpdate(Data) returns (Result) {}
+  rpc Unlock(Data) returns (Result) {}
   rpc Update(Data) returns (Result) {}
   rpc CommitTransaction (TransactionId) returns (Result){}
+  rpc RollBackTransaction (TransactionId) returns (Result){}
+
+//  Bamboo
+  rpc BambooRetireLock(Data) returns (Result) {}
+  rpc BambooWaitForCommit(TransactionId) returns (Result) {}
 }
 
 message Transaction {
@@ -31,8 +33,9 @@ message TransactionId {
 message Data{
   string transactionId = 1;
   string type = 2; // read/write/delete/insert
-  string key = 3; // <Table, Id, Query>
-  string value = 4; // <Variable, New Value> (only for write/update) | (,,,) (new record for insert)
+  string key = 3; // <Table, Id, Query> | Table (for insert)
+  string value = 4; // <Variable, New Value> (only for write/update) | <,,,> (new record for insert)
+  string recordId = 5; // optional: for insert
 }
 //
 //message Key {

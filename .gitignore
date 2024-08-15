@@ -1,3 +1,10 @@
+./graph.png
+graph.png
+result/result.csv
+scripts/init.sql
+scripts/test.db
+scripts/hot_records*
+
 target/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
@@ -8,6 +15,7 @@ target/
 .idea/jarRepositories.xml
 .idea/compiler.xml
 .idea/libraries/
+.idea/
 .idea
 *.iws
 *.iml

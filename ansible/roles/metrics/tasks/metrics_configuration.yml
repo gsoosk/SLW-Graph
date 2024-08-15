@@ -1,0 +1,24 @@
+- name: add server configuration
+  blockinfile:
+    path: metrics/prometheus/prometheus.yml
+    block: "{{ lookup('template', 'templates/scrape_config_block.j2') }}"
+    marker: "{{ '# server ' + hostvars[ item ]['id'] + ' configuration' }}"
+  vars:
+    url: "{{ item }}"
+    node_name: "{{'server_' + hostvars[ item ]['id']}}"
+    target_address: "{{ hostvars[ item ]['discovery_ip'] }}"
+    target_port: "9000"
+  loop: "{{ groups['servers'] }}"
+
+
+- name: add benchmark configuration
+  blockinfile:
+    path: metrics/prometheus/prometheus.yml
+    block: "{{ lookup('template', 'templates/scrape_config_block.j2') }}"
+    marker: "{{ '# server ' + hostvars[ item ]['id'] + ' configuration' }}"
+  vars:
+    url: "{{ item }}"
+    node_name: "{{'server_' + hostvars[ item ]['id']}}"
+    target_address: "{{ hostvars[ item ]['discovery_ip'] }}"
+    target_port: "9002"
+  loop: "{{ groups['benchmark'] }}"

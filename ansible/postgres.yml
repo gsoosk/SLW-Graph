@@ -1,0 +1,10 @@
+---
+- name: postgres
+  hosts:
+    - servers
+  become: yes
+  tasks:
+    - include_role:
+        name: postgres
+        tasks_from: init_sql.yml
+

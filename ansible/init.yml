@@ -1,0 +1,22 @@
+---
+- name: Install Requirements (Java, Docker) on servers
+  hosts:
+    - servers
+#    - benchmark
+  become: yes
+  tasks:
+    - include_role:
+        name: common
+        tasks_from: install_docker.yml
+#    - include_role:
+#        name: common
+#        tasks_from: install_java.yml
+
+- name: Install Requirements (Docker) on prometheus server
+  hosts:
+    - prometheus
+  become: yes
+  tasks:
+    - include_role:
+        name: common
+        tasks_from: install_docker.yml
