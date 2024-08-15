@@ -29,7 +29,7 @@ class DBLock {
     private final Map<DBTransaction, LockType> pendingLockTypes;
 
 
-    private static final boolean BAMBOO_ENABLE = Postgres.BAMBOO_ENABLE;
+    public static boolean BAMBOO_ENABLE = false;
 
     public DBLock(String resource) {
         this.resource = resource;

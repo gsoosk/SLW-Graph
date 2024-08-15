@@ -16,6 +16,10 @@ service RetryFreeDBServer {
 //  Bamboo
   rpc BambooRetireLock(Data) returns (Result) {}
   rpc BambooWaitForCommit(TransactionId) returns (Result) {}
+
+
+//  General
+  rpc SetConfig(Config) returns (Result) {}
 }
 
 message Transaction {
@@ -61,3 +65,8 @@ message Result {
 //message Size {
 //  int64 value = 1;
 //}
+
+
+message Config {
+  map <string, string> values = 1;
+}

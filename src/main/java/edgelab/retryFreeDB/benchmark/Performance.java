@@ -285,6 +285,10 @@ public class Performance {
         this.MAX_RETRY = res.getInt("maxRetry");
 //        connectToDataStore(address, port);
 
+        Map<String, String> serverConfig = new HashMap<>();
+        if (res.getInt("operationDelay") != null)
+            serverConfig.put("operationDelay", res.getInt("operationDelay").toString());
+        serverConfig.put("mode", res.getString("2PLMode"));
 
         long startMs = System.currentTimeMillis();
 
@@ -296,7 +300,8 @@ public class Performance {
 
 
         Thread.sleep(3000);
-        client = new Client(address, port);
+        client = new Client(address, port, res.getString("2PLMode"));
+        client.setServerConfig(serverConfig);
 
         long sendingStart = System.currentTimeMillis();
 
@@ -897,6 +902,26 @@ public class Performance {
                 .dest("readItemNumber")
                 .metavar("READITEMNUMBER")
                 .help("number of items to read at the same time");
+
+        parser.addArgument("--operation-delay")
+                .action(store())
+                .required(false)
+                .type(Integer.class)
+                .dest("operationDelay")
+                .metavar("OPERATIONDELAY")
+                .help("the amount of time each operation will be delayed, mimicking the thinking time.");
+
+
+        parser.addArgument("--2pl-mode")
+                .action(store())
+                .required(false)
+                .setDefault("slw")
+                .type(String.class)
+                .dest("2PLMode")
+                .metavar("2PLMODE")
+                .help("2pl algorithm used in server. ww: Wound-Wait, bamboo: Bamboo, slw: SLW-Graph");
+
+
 
         return parser;
     }

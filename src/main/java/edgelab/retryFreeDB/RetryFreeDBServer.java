@@ -1,5 +1,6 @@
 package edgelab.retryFreeDB;
 
+import edgelab.proto.Config;
 import edgelab.proto.Data;
 import edgelab.proto.Empty;
 import edgelab.proto.TransactionId;
@@ -16,10 +17,12 @@ import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.filefilter.FalseFileFilter;
 
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -370,6 +373,31 @@ public class RetryFreeDBServer {
                 responseObserver.onCompleted();
             }
 
+
+        }
+
+
+        @Override
+        public void setConfig(Config config, StreamObserver<Result> responseObserver) {
+            Map<String, String> configMap = config.getValuesMap();
+            try {
+                if (configMap.containsKey("mode")) {
+                    Postgres.setMode(configMap.get("mode"));
+                    log.info("2pl mode is set to :{}", configMap.get("mode"));
+                }
+
+                if (configMap.containsKey("operationDelay")) {
+                    Postgres.OPERATION_THINKING_TIME = Integer.parseInt(configMap.get("operationDelay"));
+                    log.info("operation thinking time is set to {}", Integer.parseInt(configMap.get("operationDelay")));
+                }
+
+                responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
+                responseObserver.onCompleted();
+            }
+            catch (Exception e) {
+                responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Error:" + e.getMessage()).build());
+                responseObserver.onCompleted();
+            }
 
         }
 

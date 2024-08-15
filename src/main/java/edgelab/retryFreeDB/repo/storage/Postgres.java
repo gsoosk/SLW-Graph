@@ -26,15 +26,37 @@ import java.util.concurrent.locks.ReentrantLock;
 @Slf4j
 public class Postgres implements Storage{
     private static final String DEADLOCK_ERROR = "40P01";
-    public static boolean WOUND_WAIT_ENABLE = true;
-    public static boolean BAMBOO_ENABLE = true;
-    public static boolean SHARED_LOCK_ENABLE = true;
+    private static boolean WOUND_WAIT_ENABLE = true;
+    private static boolean BAMBOO_ENABLE = true;
+    private static final boolean SHARED_LOCK_ENABLE = true;
+
+    public static void setMode(String mode) throws Exception {
+        switch (mode) {
+            case "slw" -> {
+                Postgres.BAMBOO_ENABLE = false;
+                Postgres.WOUND_WAIT_ENABLE = false;
+                DBLock.BAMBOO_ENABLE = false;
+            }
+            case "ww" -> {
+                Postgres.BAMBOO_ENABLE = false;
+                Postgres.WOUND_WAIT_ENABLE = true;
+                DBLock.BAMBOO_ENABLE = false;
+            }
+            case "bamboo" -> {
+                Postgres.BAMBOO_ENABLE = true;
+                Postgres.WOUND_WAIT_ENABLE = true;
+                DBLock.BAMBOO_ENABLE = true;
+            }
+            default -> throw new Exception("This mode of 2pl is not supported by server");
+        }
+    }
+
     private static String url = "";
     private static final String user = "user";
     private static final String password = "password";
 
     private static final long LOCK_THINKING_TIME = 0;
-    private static final long OPERATION_THINKING_TIME = 10;
+    public static  long OPERATION_THINKING_TIME = 10;
 
     private String partitionId;
 

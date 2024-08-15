@@ -1,5 +1,6 @@
 package edgelab.retryFreeDB;
 
+import edgelab.proto.Config;
 import edgelab.proto.RetryFreeDBServerGrpc;
 import edgelab.proto.Data;
 import edgelab.proto.Empty;
@@ -30,19 +31,19 @@ public class Client {
     private final ManagedChannel channel;
     private Map<String, Set<String>> locks = new ConcurrentHashMap<>();
 
-    private enum Mode {BAMBOO, SLW, WW};
-    private final Mode mode = Mode.BAMBOO;
+    private String mode;
 
-    public Client(String toConnectAddress, int toConnectPort)
+    public Client(String toConnectAddress, int toConnectPort, String mode)
     {
         this.channel = ManagedChannelBuilder.forAddress(toConnectAddress, toConnectPort).usePlaintext().build();
         this.blockingStub = RetryFreeDBServerGrpc.newBlockingStub(channel);
+        this.mode = mode;
     }
 
     public static void main(String args[])
     {
 
-        Client client = new Client(args[0], Integer.parseInt(args[1]));
+        Client client = new Client(args[0], Integer.parseInt(args[1]), "slw");
         Map<String, HashSet<String>> hotRecords = new HashMap<>();
 
 
@@ -125,11 +126,18 @@ public class Client {
 
     }
 
+    public void setServerConfig(Map<String, String> config) {
+        Result result = blockingStub.setConfig(Config.newBuilder().putAllValues(config).build());
+        if (!result.getStatus())
+            throw new RuntimeException("Could not set the server config!");
+
+    }
+
     public boolean readItem(List<String> items) {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String tx = initResult.getMessage();
-            if (mode == Mode.BAMBOO || mode == Mode.WW) {
+            if (mode.equals("bamboo") || mode.equals("ww")) {
                 if (readItemBamboo(items, tx)) return false;
             }
             else {
@@ -220,9 +228,9 @@ public class Client {
 
 //    remoteCalls : 4
     public String addListing(String PId, String IId, double price) {
-        if (mode == Mode.SLW)
+        if (mode.equals("slw"))
             return addListingSLW(PId, IId, price);
-        else if (mode == Mode.BAMBOO)
+        else if (mode.equals("ww"))
             return addListingBamboo(PId, IId, price);
         else
             return addListingWW(PId, IId, price);
@@ -537,9 +545,9 @@ public class Client {
         return null;
     }
     public String buyListing(String PId, String LId) {
-        if (mode == Mode.SLW)
+        if (mode.equals("slw"))
             return buyListingSLW(PId, LId);
-        else if (mode == Mode.BAMBOO)
+        else if (mode.equals("bamboo"))
             return buyListingBamboo(PId, LId);
         else
             return buyListingWW(PId, LId);
