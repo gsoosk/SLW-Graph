@@ -29,7 +29,7 @@ class DBLock {
     private final Map<DBTransaction, LockType> pendingLockTypes;
 
 
-    private static final boolean BAMBOO_ENABLE = true;
+    private static final boolean BAMBOO_ENABLE = Postgres.BAMBOO_ENABLE;
 
     public DBLock(String resource) {
         this.resource = resource;
@@ -118,6 +118,8 @@ class DBLock {
     public synchronized boolean conflict(DBTransaction holdingTransaction, DBTransaction transaction, LockType lockType) {
         if (holdingTransaction.equals(transaction))
             return false;
+        if (!holdingTransactions.contains(holdingTransaction) && retiredTransactions.contains(holdingTransaction))
+            return lockType == LockType.WRITE || retiredLockTypes.get(holdingTransaction) == LockType.WRITE;
         return lockType == LockType.WRITE || ownersLockType == LockType.WRITE;
     }
 

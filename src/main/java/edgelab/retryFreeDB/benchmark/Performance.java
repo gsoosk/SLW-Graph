@@ -280,10 +280,7 @@ public class Performance {
         if (res.getInt("maxThreads") != null)
             this.MAX_THREADS = res.getInt("maxThreads");
 
-        if (res.getInt("maxItemsThreads") != null) {
-            this.MAX_ITEM_READ_THREADS = res.getInt("maxItemsThreads");
-            this.MAX_THREADS -= this.MAX_ITEM_READ_THREADS;
-        }
+
 
         this.MAX_RETRY = res.getInt("maxRetry");
 //        connectToDataStore(address, port);
@@ -310,6 +307,12 @@ public class Performance {
         Integer numberOfItemsToRead = res.get("readItemNumber");
         Thread itemThread = null;
         if (numberOfItemsToRead > 0) {
+            if (res.getInt("maxItemsThreads") != null ) {
+                this.MAX_ITEM_READ_THREADS = res.getInt("maxItemsThreads");
+                this.MAX_THREADS -= this.MAX_ITEM_READ_THREADS;
+            }
+
+
             itemExecutor = (ThreadPoolExecutor) Executors.newFixedThreadPool(MAX_ITEM_READ_THREADS);
             itemThread = Executors.defaultThreadFactory().newThread(() -> {
                 log.info("Item read thread has been created");
@@ -326,9 +329,10 @@ public class Performance {
 
                     itemExecutor.submit(() -> {
                         int itemId = random.nextInt(hotItems.size());
-                        client.readItem(itemsToGet);
+                        boolean status = client.readItem(itemsToGet);
                         log.info("Item {} read finished", hotItems.get(itemId));
-                        stats.itemReadFinished();
+                        if (status)
+                            stats.itemReadFinished();
                     });
 
 
@@ -486,7 +490,7 @@ public class Performance {
             boolean success = true;
 
             if (request.getType() == ServerRequest.Type.BUY) {
-                String newItem = client.buyListingBamboo(request.getValues().get("PId"), request.getValues().get("LId"));
+                String newItem = client.buyListing(request.getValues().get("PId"), request.getValues().get("LId"));
                 if (newItem == null) {
                     success = false;
                     log.error("Unsuccessful buy {}", request.getValues());
@@ -494,7 +498,7 @@ public class Performance {
                 }
             }
             else if (request.getType() == ServerRequest.Type.SELL) {
-                String newListing = client.addListingBamboo(request.getValues().get("PId"), request.getValues().get("IId"), 1);
+                String newListing = client.addListing(request.getValues().get("PId"), request.getValues().get("IId"), 1);
                 if (newListing == null) {
                     success = false;
                     log.error("Unsuccessful sell {}", request.getValues());
@@ -503,7 +507,7 @@ public class Performance {
             }
 
             else if (request.getType() == ServerRequest.Type.BUY_HOT) {
-                String newItem = client.buyListingBamboo(request.getValues().get("PId"), request.getValues().get("LId"));
+                String newItem = client.buyListing(request.getValues().get("PId"), request.getValues().get("LId"));
                 if (newItem != null) {
                     hotPlayersAndItems.get(request.getValues().get("PId")).add(newItem);
                 }
@@ -516,7 +520,7 @@ public class Performance {
                 }
             }
             else if (request.getType() == ServerRequest.Type.SELL_HOT) {
-                String newListing = client.addListingBamboo(request.getValues().get("PId"), request.getValues().get("IId"), 1);
+                String newListing = client.addListing(request.getValues().get("PId"), request.getValues().get("IId"), 1);
                 if (newListing != null) {
                     hotListings.put(newListing, List.of(request.getValues().get("IId"), "1"));
                 }
@@ -1034,7 +1038,7 @@ public class Performance {
 
                 // Check if the file already exists to avoid overwriting it
                 if (!Files.exists(path)) {
-                    String CSVHeader = "num of records, hot_records, prob, threads, throughput(tx/s), item_read(tx/s)\n";
+                    String CSVHeader = "num of records, hot_records, prob, threads, throughput(tx/s), item_read(tx/s), request_retried, total_retries, avg_retry_per_request\n";
                     BufferedWriter out = new BufferedWriter(new FileWriter(resultFilePath));
 
                     // Writing the header to output stream
@@ -1147,7 +1151,7 @@ public class Performance {
             double mbPerSec = 1000.0 * this.bytes / (double) elapsed / (1024.0);
             double throughputMbPerSec = 1000.0 * this.startedBytes / (double) elapsed / (1024.0);
             int[] percs = percentiles(this.latencies, index, 0.5, 0.95, 0.99, 0.999);
-            System.out.printf("%d records sent, %f records/sec (%.3f KB/sec) of (%.3f KB/sec), %.3f items/sec, %.2f ms avg latency, %.2f ms max latency, %d ms 50th, %d ms 95th, %d ms 99th, %d ms 99.9th.%n --  requests retried: %d, retries: %d\n",
+            System.out.printf("%d records sent, %f records/sec (%.3f KB/sec) of (%.3f KB/sec), %.3f items/sec, %.2f ms avg latency, %.2f ms max latency, %d ms 50th, %d ms 95th, %d ms 99th, %d ms 99.9th.%n --  requests retried: %d, retries: %d, avg retry per request: %.2f\n",
                     count,
                     recsPerSec,
                     mbPerSec,
@@ -1160,14 +1164,18 @@ public class Performance {
                     percs[2],
                     percs[3],
                     retries.size(),
-                    retries.values().stream().mapToInt(Integer::intValue).sum());
-            String resultCSV = String.format("%d,%s,%d,%d,%.2f,%.2f\n",
+                    retries.values().stream().mapToInt(Integer::intValue).sum(),
+                    retries.values().stream().mapToInt(Integer::intValue).average().getAsDouble());
+            String resultCSV = String.format("%d,%s,%d,%d,%.2f,%.2f,%d,%d,%.2f\n",
                     count,
                     hotRecords,
                     hotChance,
                     threads,
                     recsPerSec,
-                    itemsPerSec);
+                    itemsPerSec,
+                    retries.size(),
+                    retries.values().stream().mapToInt(Integer::intValue).sum(),
+                    retries.values().stream().mapToInt(Integer::intValue).average().getAsDouble());
             try {
                 BufferedWriter out = new BufferedWriter(
                         new FileWriter(resultFilePath, true));

@@ -498,6 +498,8 @@ public class Postgres implements Storage{
 
         if (lock != null) {
             synchronized (lock) {
+                if (!lock.getHoldingTransactions().contains(tx))
+                    throw new Exception("Bamboo: does not hold the lock to retire");
                 lock.retire(tx);
 
                 log.info("{}: Lock retired  on {}", tx, lock.getResource());

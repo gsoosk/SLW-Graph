@@ -202,6 +202,7 @@ public class RetryFreeDBServer {
             DBData d = deserilizeDataToDBData(request);
 
             if (d != null) {
+                log.info("{}: update on {}", tx, request.getKey());
                 updateDBDataOnRepo(responseObserver, d, tx.getConnection());
             }
             else {
@@ -271,7 +272,8 @@ public class RetryFreeDBServer {
 //                return true;
 //            }
             DBTransaction tx = transactions.get(transactionId);
-            if (!repo.isValid(tx.getConnection()) || toBeAbortedTransactions.contains(tx)) {
+            if (tx.isAbort()) {
+//            if (!repo.isValid(tx.getConnection()) || toBeAbortedTransactions.contains(tx)) {
                 log.info("{}: Transaction already aborted", tx);
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("transaction already aborted").build());
                 responseObserver.onCompleted();
@@ -345,7 +347,7 @@ public class RetryFreeDBServer {
                     responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
                     responseObserver.onCompleted();
                 } catch (Exception e) {
-                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not retire").build());
+                    responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not retire " + e.getMessage()).build());
                     responseObserver.onCompleted();
                     return;
                 }
@@ -359,6 +361,7 @@ public class RetryFreeDBServer {
 
             DBTransaction tx = transactions.get(transactionId.getId());
             try {
+                log.info("{}: wait for commit", tx);
                 tx.waitForCommit();
                 responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
                 responseObserver.onCompleted();

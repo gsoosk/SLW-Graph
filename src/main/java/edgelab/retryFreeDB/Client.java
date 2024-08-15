@@ -30,6 +30,9 @@ public class Client {
     private final ManagedChannel channel;
     private Map<String, Set<String>> locks = new ConcurrentHashMap<>();
 
+    private enum Mode {BAMBOO, SLW, WW};
+    private final Mode mode = Mode.BAMBOO;
+
     public Client(String toConnectAddress, int toConnectPort)
     {
         this.channel = ManagedChannelBuilder.forAddress(toConnectAddress, toConnectPort).usePlaintext().build();
@@ -122,25 +125,52 @@ public class Client {
 
     }
 
-    public void readItem(List<String> items) {
+    public boolean readItem(List<String> items) {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String tx = initResult.getMessage();
-            Collections.sort(items);
-            for (String IId:
-                 items) {
-                lock(tx, "Items", "IId", IId);
-
+            if (mode == Mode.BAMBOO || mode == Mode.WW) {
+                if (readItemBamboo(items, tx)) return false;
             }
-
-            for (String IId:
-                    items) {
-                Map<String, String> item = read(tx, "Items", "IId", IId);
+            else {
+                if (readItemSLW(items, tx)) return false;
             }
+            return commit(tx).getStatus();
 
-            waitForCommit(tx);
-            commit(tx);
         }
+        return false;
+    }
+
+    private boolean readItemSLW(List<String> items, String tx) {
+//        Collections.sort(items);
+        return readItems(items, tx);
+    }
+
+    private boolean readItems(List<String> items, String tx) {
+        for (String IId:
+                items) {
+            if (!lock(tx, "Items", "IId", IId, READ_TYPE).getStatus()) {
+                rollback(tx);
+                return true;
+            }
+
+            Map<String, String> item = read(tx, "Items", "IId", IId);
+            if (item.isEmpty()) {
+                rollback(tx);
+                return true;
+            }
+
+        }
+        return false;
+    }
+
+    private boolean readItemBamboo(List<String> items, String tx) {
+        if (readItems(items, tx)) return true;
+        if (!waitForCommit(tx).getStatus()) {
+            rollback(tx);
+            return true;
+        }
+        return false;
     }
 
     private void simulateDeadlock() {
@@ -190,6 +220,15 @@ public class Client {
 
 //    remoteCalls : 4
     public String addListing(String PId, String IId, double price) {
+        if (mode == Mode.SLW)
+            return addListingSLW(PId, IId, price);
+        else if (mode == Mode.BAMBOO)
+            return addListingBamboo(PId, IId, price);
+        else
+            return addListingWW(PId, IId, price);
+    }
+
+    public String addListingWW(String PId, String IId, double price) {
 
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
@@ -472,7 +511,7 @@ public class Client {
 
             String listingRecordId = insertLock(transactionId, "Listings").getMessage();
 
-            lock(transactionId, "Items", "IId", IId);
+            lock(transactionId, "Items", "IId", IId, READ_TYPE);
             Map<String, String> item = read(transactionId, "Items", "IId", IId);
 //             Check the owner
             if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
@@ -481,7 +520,7 @@ public class Client {
                 return null;
             }
 
-            lock(transactionId, "Players", "PId", PId);
+            lock(transactionId, "Players", "PId", PId, READ_TYPE);
             unlock(transactionId, "Items", "IId", IId);
             Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
@@ -497,8 +536,15 @@ public class Client {
         }
         return null;
     }
-
     public String buyListing(String PId, String LId) {
+        if (mode == Mode.SLW)
+            return buyListingSLW(PId, LId);
+        else if (mode == Mode.BAMBOO)
+            return buyListingBamboo(PId, LId);
+        else
+            return buyListingWW(PId, LId);
+    }
+    public String buyListingWW(String PId, String LId) {
 
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
 
@@ -740,10 +786,11 @@ public class Client {
             result = blockingStub.update(data);
         return result;
     }
-    private void commit(String transactionId) {
+    private Result commit(String transactionId) {
         Result commitResult = blockingStub.commitTransaction(TransactionId.newBuilder().setId(transactionId).build());
         log.info("commit {}: {}, {}", transactionId, commitResult.getStatus(), commitResult.getMessage());
         locks.remove(transactionId);
+        return commitResult;
     }
 
     private boolean write(String transactionId, String tableName, String key, String value, String newKey, String newValue) {
@@ -775,7 +822,7 @@ public class Client {
                 .setKey(tableName + "," + key + "," + value)
                 .build();
         Result readResult = performRemoteOperation(readData);
-        log.info("read from {} status : {}", tableName, readResult.getStatus());
+        log.info("{}: read from {} status : {}",transactionId, tableName, readResult.getStatus());
         return readResult.getStatus() ? convertStringToMap(readResult.getMessage()) : new HashMap<>();
     }
 
