@@ -1,5 +1,6 @@
 ./graph.png
 graph.png
+result/result.csv
 scripts/init.sql
 scripts/test.db
 scripts/hot_records*
