@@ -1,0 +1,94 @@
+version: '3.5'
+
+services:
+  postgres0_service:
+    container_name: postgres0_service
+    image: postgres_slw:init
+    networks:
+      app_net:
+        ipv4_address: 172.28.1.1
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: postgres
+      PGDATA: /data/postgres
+      #volumes:
+      #- postgres0:/data/postgres
+    #      - ../scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "30"
+          memory: 60G
+
+
+  # network-shaper:
+  #   image: gaiaadm/pumba
+  #   container_name: network_shaper
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   networks:
+  #     - app_net
+  #   command: netem --duration 300m delay --time 5 --jitter 1 server
+  #   # restart: unless-stopped
+  #   depends_on:
+  #     - postgres0_service
+  #     - java-server
+  #     - java-client
+
+  java-server:
+    container_name: server
+    image: java-app
+    volumes:
+      - ../app/Server.jar:/app/app.jar
+    command: ["8000", "172.28.1.1", "5432", "Listings,Items,Players"]
+    networks:
+      app_net:
+        ipv4_address: 172.28.1.2
+    deploy:
+      resources:
+        limits:
+          cpus: "30"
+          memory: 60G
+    restart: unless-stopped
+    depends_on:
+      - postgres0_service
+
+  java-client:
+    container_name: client
+    image: java-app
+    volumes:
+      - ../app/Client.jar:/app/app.jar
+      - ../postgres:/app/postgres
+      - ./result:/app/result
+    command: [ "--address", "172.28.1.2",
+               "--port", "8000",
+               "--2pl-mode", "${MODE:-slw}",
+               "--throughput", "-1",
+               "--benchmark-time", "30",
+               "--hot-players", "postgres/hot_records_${HOT:-16}_items",
+               "--hot-listings", "postgres/hot_records_${HOT:-16}_listings",
+               "--hot-selection-prob", "${PROB:-100}",
+               "--read-item-number", "${ITEM:-1}",
+               "--max-threads", "60",
+      #  "--max-items-threads", "60",
+               "--max-retry", "10",
+               "--operation-delay", "${DELAY:-10}"]
+    networks:
+      app_net:
+        ipv4_address: 172.28.1.3
+    deploy:
+      resources:
+        limits:
+          cpus: "30"
+          memory: 60G
+    depends_on:
+      - java-server
+      - postgres0_service
+
+networks:
+  app_net:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
