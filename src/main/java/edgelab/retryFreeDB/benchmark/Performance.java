@@ -1038,7 +1038,7 @@ public class Performance {
 
                 // Check if the file already exists to avoid overwriting it
                 if (!Files.exists(path)) {
-                    String CSVHeader = "num of records, hot_records, prob, threads, throughput(tx/s), item_read(tx/s), request_retried, total_retries, avg_retry_per_request\n";
+                    String CSVHeader = "num of records, hot_records, prob, threads, throughput(tx/s), item_read(tx/s), request_retried, total_retries, avg_retry_per_request, avg_latency, max_latency, 50th_latency, 95th_latency, 99th_latency, 99.9th_latency \n";
                     BufferedWriter out = new BufferedWriter(new FileWriter(resultFilePath));
 
                     // Writing the header to output stream
@@ -1166,7 +1166,7 @@ public class Performance {
                     retries.size(),
                     retries.values().stream().mapToInt(Integer::intValue).sum(),
                     retries.values().stream().mapToInt(Integer::intValue).average().getAsDouble());
-            String resultCSV = String.format("%d,%s,%d,%d,%.2f,%.2f,%d,%d,%.2f\n",
+            String resultCSV = String.format("%d,%s,%d,%d,%.2f,%.2f,%d,%d,%.2f,%.2f,%.2f,%d,%d,%d,%d\n",
                     count,
                     hotRecords,
                     hotChance,
@@ -1175,7 +1175,13 @@ public class Performance {
                     itemsPerSec,
                     retries.size(),
                     retries.values().stream().mapToInt(Integer::intValue).sum(),
-                    retries.values().stream().mapToInt(Integer::intValue).average().getAsDouble());
+                    retries.values().stream().mapToInt(Integer::intValue).average().getAsDouble(),
+                    totalLatency / (double) count,
+                    (double) maxLatency,
+                    percs[0],
+                    percs[1],
+                    percs[2],
+                    percs[3]);
             try {
                 BufferedWriter out = new BufferedWriter(
                         new FileWriter(resultFilePath, true));
