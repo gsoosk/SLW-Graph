@@ -68,6 +68,25 @@ public class Postgres implements Storage{
 
     public Postgres(String addr, String port) {
         url = "jdbc:postgresql://" + addr + ":" + port + "/postgres";
+        setPostgresLogLevel("DEBUG1");
+    }
+
+    private void setPostgresLogLevel(String level) {
+        try (Connection conn = DriverManager.getConnection(url, user, password);
+             Statement stmt = conn.createStatement()) {
+
+            // Set global log level for all sessions
+
+            stmt.execute("ALTER SYSTEM SET log_min_messages TO 'INFO';");
+
+            // Reload the configuration for changes to take effect
+            stmt.execute("SELECT pg_reload_conf();");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+
     }
 
     private void setDeadlockDetectionTimeout(Connection conn, String timeout) throws SQLException {
@@ -116,61 +135,61 @@ public class Postgres implements Storage{
         return "data" + partitionId;
     }
 
-    public String get(String key) {
-        String SQL = "SELECT value FROM " + getTable() + " WHERE key = ?";
-        String value = null;
+//    public String get(String key) {
+//        String SQL = "SELECT value FROM " + getTable() + " WHERE key = ?";
+//        String value = null;
+//
+//        try (Connection conn = connect();
+//             PreparedStatement pstmt = conn.prepareStatement(SQL)) {
+//
+//            pstmt.setString(1, key);
+//            ResultSet rs = pstmt.executeQuery();
+//            if (rs.next())
+//                value = rs.getString("value");
+//
+//        } catch (SQLException ex) {
+//            log.info(ex.getMessage());
+//        }
+//
+//        return value;
+//    }
 
-        try (Connection conn = connect();
-             PreparedStatement pstmt = conn.prepareStatement(SQL)) {
+//    public Boolean containsKey(String key) {
+//        String SQL = "SELECT value FROM " + getTable() +  " WHERE key = ?";
+//
+//        try (Connection conn = connect();
+//             PreparedStatement pstmt = conn.prepareStatement(SQL)) {
+//
+//            pstmt.setString(1, key);
+//            ResultSet rs = pstmt.executeQuery();
+//            if (rs.next())
+//                return true;
+//
+//        } catch (SQLException ex) {
+//            log.info(ex.getMessage());
+//        }
+//
+//        return false;
+//    }
 
-            pstmt.setString(1, key);
-            ResultSet rs = pstmt.executeQuery();
-            if (rs.next())
-                value = rs.getString("value");
-
-        } catch (SQLException ex) {
-            log.info(ex.getMessage());
-        }
-
-        return value;
-    }
-
-    public Boolean containsKey(String key) {
-        String SQL = "SELECT value FROM " + getTable() +  " WHERE key = ?";
-
-        try (Connection conn = connect();
-             PreparedStatement pstmt = conn.prepareStatement(SQL)) {
-
-            pstmt.setString(1, key);
-            ResultSet rs = pstmt.executeQuery();
-            if (rs.next())
-                return true;
-
-        } catch (SQLException ex) {
-            log.info(ex.getMessage());
-        }
-
-        return false;
-    }
-
-    public void put(String key, String value) {
-        String insertSQL = "INSERT INTO "+ getTable() +" (key, value) " +
-                "VALUES (?,?)" +
-                "ON CONFLICT (key) DO UPDATE " +
-                "    SET value = excluded.value; ";
-
-        try (Connection conn = connect();
-             PreparedStatement pstmt = conn.prepareStatement(insertSQL)) {
-
-            pstmt.setString(1, key);
-            pstmt.setString(2, value);
-
-            pstmt.executeUpdate();
-        } catch (SQLException ex) {
-            log.info(ex.getMessage());
-        }
-    }
-
+//    public void put(String key, String value) {
+//        String insertSQL = "INSERT INTO "+ getTable() +" (key, value) " +
+//                "VALUES (?,?)" +
+//                "ON CONFLICT (key) DO UPDATE " +
+//                "    SET value = excluded.value; ";
+//
+//        try (Connection conn = connect();
+//             PreparedStatement pstmt = conn.prepareStatement(insertSQL)) {
+//
+//            pstmt.setString(1, key);
+//            pstmt.setString(2, value);
+//
+//            pstmt.executeUpdate();
+//        } catch (SQLException ex) {
+//            log.info(ex.getMessage());
+//        }
+//    }
+//
 
     public void remove(String key) {
 
@@ -545,33 +564,33 @@ public class Postgres implements Storage{
 //    }
 
 
+//
+//    private static void unlockAdvisory(Connection conn, String tableName, Integer id) throws SQLException {
+//        String lockSQL = "SELECT pg_advisory_unlock('" + tableName + "'::regclass::integer, ?)";
+//        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+//            updateStmt.setInt(1, id);
+//            updateStmt.executeQuery();
+//        } catch (SQLException ex) {
+//            log.error("db error: couldn't unlock,  {}", ex.getMessage());
+//            throw ex;
+//        }
+//        log.info("Advisory lock unlocked {},{}", tableName, id);
+//    }
 
-    private static void unlockAdvisory(Connection conn, String tableName, Integer id) throws SQLException {
-        String lockSQL = "SELECT pg_advisory_unlock('" + tableName + "'::regclass::integer, ?)";
-        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
-            updateStmt.setInt(1, id);
-            updateStmt.executeQuery();
-        } catch (SQLException ex) {
-            log.error("db error: couldn't unlock,  {}", ex.getMessage());
-            throw ex;
-        }
-        log.info("Advisory lock unlocked {},{}", tableName, id);
-    }
-
-
-    public void lockTable(Connection conn, DBInsertData data) throws SQLException {
-        log.info("Acquiring table lock for data");
-//        FIXME: Risk of sql injection
-        String lockSQL = "LOCK TABLE "+ data.getTable() +" IN ACCESS EXCLUSIVE";
-        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
-            updateStmt.executeQuery();
-        }
-        catch (SQLException ex) {
-            log.info("db error: couldn't lock the table,  {}", ex.getMessage());
-            throw ex;
-        }
-        log.info("Locks on table {} acquired", data.getTable());
-    }
+//
+//    public void lockTable(Connection conn, DBInsertData data) throws SQLException {
+//        log.info("Acquiring table lock for data");
+////        FIXME: Risk of sql injection
+//        String lockSQL = "LOCK TABLE "+ data.getTable() +" IN ACCESS EXCLUSIVE";
+//        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+//            updateStmt.executeQuery();
+//        }
+//        catch (SQLException ex) {
+//            log.info("db error: couldn't lock the table,  {}", ex.getMessage());
+//            throw ex;
+//        }
+//        log.info("Locks on table {} acquired", data.getTable());
+//    }
     public void release(DBTransaction tx, Set<DBTransaction> toBeAborted) throws SQLException {
         try {
             Connection conn = tx.getConnection();

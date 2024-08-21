@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -156,6 +157,7 @@ public class Performance {
     private Map<String, Set<String>> hotPlayersAndItems; // Player:{items}
     private List<String> hotItems = new ArrayList<>();
     private Map<String, List<String>> hotListings; // Listing: <iid, price>
+    private Set<String> alreadyBoughtListing = new HashSet<>();
     private int HOT_RECORD_SELECTION_CHANCE = 80;
     private int NUM_OF_PLAYERS = 500000;
     private int NUM_OF_LILSTINGS = 100000;
@@ -286,8 +288,11 @@ public class Performance {
 //        connectToDataStore(address, port);
 
         Map<String, String> serverConfig = new HashMap<>();
-        if (res.getInt("operationDelay") != null)
+        int operationDelay = 10;
+        if (res.getInt("operationDelay") != null) {
             serverConfig.put("operationDelay", res.getInt("operationDelay").toString());
+            operationDelay = res.getInt("operationDelay");
+        }
         serverConfig.put("mode", res.getString("2PLMode"));
 
         long startMs = System.currentTimeMillis();
@@ -307,7 +312,7 @@ public class Performance {
 
 //            TODO: Refactor this function
         long startToWaitTime = System.currentTimeMillis();
-        Stats stats = new Stats(numRecords, 1000, resultFilePath, metricsFilePath, recordSize, 0, 0.0, 0, 20000, res.getString("hotPlayers"), HOT_RECORD_SELECTION_CHANCE, MAX_THREADS);
+        Stats stats = new Stats(numRecords, 1000, resultFilePath, metricsFilePath, recordSize, 0, 0.0, 0, 20000, res.getString("hotPlayers"), HOT_RECORD_SELECTION_CHANCE, MAX_THREADS, res.getString("2PLMode"), operationDelay);
 
         Integer numberOfItemsToRead = res.get("readItemNumber");
         Thread itemThread = null;
@@ -381,9 +386,13 @@ public class Performance {
 
 
         }
-        // wait for retries to be done
-//        Thread.sleep(timeout * 3L);
 
+
+
+
+        // wait for retries to be done
+        Thread.sleep(1000 * 3L);
+        log.info("Benchmark is finished...");
 
         // TODO: closing open things?
         /* print final results */
@@ -458,8 +467,13 @@ public class Performance {
         } else {
             Map<String, String> tx = new HashMap<>();
             if (buy_or_sell % 2 == 0) {
+                String lid = Integer.toString(random.nextInt(1, NUM_OF_LILSTINGS));
+                while (alreadyBoughtListing.contains(lid))
+                    lid = Integer.toString(random.nextInt(1, NUM_OF_LILSTINGS));
+
+                alreadyBoughtListing.add(lid);
                 tx.put("PId", Integer.toString(random.nextInt(1, NUM_OF_PLAYERS)));
-                tx.put("LId", Integer.toString(random.nextInt(1, NUM_OF_LILSTINGS)));
+                tx.put("LId", lid);
                 long sendStartMs = System.currentTimeMillis();
                 return new ServerRequest(ServerRequest.Type.BUY, txId++, tx , sendStartMs);
             } else {
@@ -499,7 +513,8 @@ public class Performance {
                 if (newItem == null) {
                     success = false;
                     log.error("Unsuccessful buy {}", request.getValues());
-                    submitRetry(request, stats);
+                    // we do not retry records that are not hot!
+//                    submitRetry(request, stats);
                 }
             }
             else if (request.getType() == ServerRequest.Type.SELL) {
@@ -507,7 +522,8 @@ public class Performance {
                 if (newListing == null) {
                     success = false;
                     log.error("Unsuccessful sell {}", request.getValues());
-                    submitRetry(request, stats);
+                    // we do not retry records that are not hot!
+//                    submitRetry(request, stats);
                 }
             }
 
@@ -965,6 +981,9 @@ public class Performance {
 
         private int threads;
 
+        private String mode;
+        private int operationDelay;
+
         // Metrics
         private static final Summary finishedRequestsBytes = Summary.build()
                 .name("paxos_requests_finished_bytes")
@@ -1011,11 +1030,11 @@ public class Performance {
                 .register();
         private int itemCount;
 
-        public Stats(long numRecords, int reportingInterval, String resultFilePath, String metricsFilePath, int recordSize, int batchSize, Double interval, int timeout, long memory, String hotRecords, int hotChance, int threads) {
-            init(numRecords, reportingInterval, resultFilePath, metricsFilePath, recordSize, batchSize, interval, timeout, memory, hotRecords, hotChance, threads);
+        public Stats(long numRecords, int reportingInterval, String resultFilePath, String metricsFilePath, int recordSize, int batchSize, Double interval, int timeout, long memory, String hotRecords, int hotChance, int threads, String mode, int operationDelay) {
+            init(numRecords, reportingInterval, resultFilePath, metricsFilePath, recordSize, batchSize, interval, timeout, memory, hotRecords, hotChance, threads, mode, operationDelay);
         }
 
-        private void init(long numRecords, int reportingInterval, String resultFilePath, String metricsFilePath, int recordSize, int batchSize, Double interval, int timeout, long memory, String hotRecords, int hotChance, int threads) {
+        private void init(long numRecords, int reportingInterval, String resultFilePath, String metricsFilePath, int recordSize, int batchSize, Double interval, int timeout, long memory, String hotRecords, int hotChance, int threads, String mode, int operationDelay) {
             this.start = System.currentTimeMillis();
             this.windowStart = System.currentTimeMillis();
             this.iteration = 0;
@@ -1053,6 +1072,8 @@ public class Performance {
             this.hotChance = hotChance;
             this.threads = threads;
             createResultCSVFiles(resultFilePath);
+            this.operationDelay = operationDelay;
+            this.mode = mode;
         }
 
         private void createResultCSVFiles(String resultFilePath) {
@@ -1063,7 +1084,7 @@ public class Performance {
 
                 // Check if the file already exists to avoid overwriting it
                 if (!Files.exists(path)) {
-                    String CSVHeader = "num of records, hot_records, prob, threads, throughput(tx/s), item_read(tx/s), request_retried, total_retries, avg_retry_per_request, avg_latency, max_latency, 50th_latency, 95th_latency, 99th_latency, 99.9th_latency \n";
+                    String CSVHeader = "num of records, mode, operation_delay, hot_records, prob, threads, throughput(tx/s), item_read(tx/s), request_retried, total_retries, avg_retry_per_request, avg_latency, max_latency, 50th_latency, 95th_latency, 99th_latency, 99.9th_latency \n";
                     BufferedWriter out = new BufferedWriter(new FileWriter(resultFilePath));
 
                     // Writing the header to output stream
@@ -1176,6 +1197,9 @@ public class Performance {
             double mbPerSec = 1000.0 * this.bytes / (double) elapsed / (1024.0);
             double throughputMbPerSec = 1000.0 * this.startedBytes / (double) elapsed / (1024.0);
             int[] percs = percentiles(this.latencies, index, 0.5, 0.95, 0.99, 0.999);
+            int numOfRetries = retries.size();
+            int totalRetries = retries.values().stream().mapToInt(Integer::intValue).sum();
+            Double avgRetryPerReq = retries.isEmpty() ? 0.0 : retries.values().stream().mapToInt(Integer::intValue).average().getAsDouble();
             System.out.printf("%d records sent, %f records/sec (%.3f KB/sec) of (%.3f KB/sec), %.3f items/sec, %.2f ms avg latency, %.2f ms max latency, %d ms 50th, %d ms 95th, %d ms 99th, %d ms 99.9th.%n --  requests retried: %d, retries: %d, avg retry per request: %.2f\n",
                     count,
                     recsPerSec,
@@ -1188,19 +1212,24 @@ public class Performance {
                     percs[1],
                     percs[2],
                     percs[3],
-                    retries.size(),
-                    retries.values().stream().mapToInt(Integer::intValue).sum(),
-                    retries.values().stream().mapToInt(Integer::intValue).average().getAsDouble());
-            String resultCSV = String.format("%d,%s,%d,%d,%.2f,%.2f,%d,%d,%.2f,%.2f,%.2f,%d,%d,%d,%d\n",
+                    numOfRetries,
+                    totalRetries,
+                    avgRetryPerReq);
+
+            System.out.println("");
+
+            String resultCSV = String.format("%d,%s,%d,%s,%d,%d,%.2f,%.2f,%d,%d,%.2f,%.2f,%.2f,%d,%d,%d,%d\n",
                     count,
+                    mode,
+                    operationDelay,
                     hotRecords,
                     hotChance,
                     threads,
                     recsPerSec,
                     itemsPerSec,
-                    retries.size(),
-                    retries.values().stream().mapToInt(Integer::intValue).sum(),
-                    retries.values().stream().mapToInt(Integer::intValue).average().getAsDouble(),
+                    numOfRetries,
+                    totalRetries,
+                    avgRetryPerReq,
                     totalLatency / (double) count,
                     (double) maxLatency,
                     percs[0],
