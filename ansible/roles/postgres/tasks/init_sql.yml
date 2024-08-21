@@ -9,11 +9,13 @@
   copy:
     src: "../../../scripts/initSqlMaker.py"
     dest: "./postgres"
+  when: test_case == 'store'
 
 - name: copy hot record selector file to remote
   copy:
     src: "../../../scripts/hotRecordsSelector.py"
     dest: "./postgres"
+  when: test_case == 'store'
 
 - name: copy Dockerfile
   copy:
@@ -28,6 +30,12 @@
   command: "python3 initSqlMaker.py"
   args:
     chdir: 'postgres'
+  when: test_case == 'store'
+
+- name: tpcc init
+  include_tasks: tpcc_init.yml
+  when: test_case == 'tpcc'
+
 
 - name: build docker file
   command: 'docker build -t postgres_slw:init . --no-cache'
@@ -38,3 +46,4 @@
   command: "python3 hotRecordsSelector.py"
   args:
     chdir: 'postgres'
+  when: test_case == 'store'

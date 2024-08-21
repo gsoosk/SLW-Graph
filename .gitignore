@@ -4,6 +4,9 @@ result/result.csv
 scripts/init.sql
 scripts/test.db
 scripts/hot_records*
+scripts/tpcc/init*
+scripts/tpcc/benchbase-postgres
+scripts/tpcc/tpcc_config_temp.xml
 
 target/
 !.mvn/wrapper/maven-wrapper.jar
