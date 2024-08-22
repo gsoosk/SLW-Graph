@@ -37,7 +37,7 @@ message TransactionId {
 message Data{
   string transactionId = 1;
   string type = 2; // read/write/delete/insert
-  string key = 3; // <Table, Id, Query> | Table (for insert)
+  string key = 3; // <Table, Id(s), Query(s)> | Table (for insert)
   string value = 4; // <Variable, New Value> (only for write/update) | <,,,> (new record for insert)
   string recordId = 5; // optional: for insert
 }

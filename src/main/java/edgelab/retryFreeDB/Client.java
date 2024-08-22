@@ -10,6 +10,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import lombok.extern.slf4j.Slf4j;
 
+import java.sql.Timestamp;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -31,7 +32,7 @@ public class Client {
     private final ManagedChannel channel;
     private Map<String, Set<String>> locks = new ConcurrentHashMap<>();
 
-    private String mode;
+    private final String mode;
 
     public Client(String toConnectAddress, int toConnectPort, String mode)
     {
@@ -51,10 +52,11 @@ public class Client {
 //        client.addListingSLW("1", "3", 1);
 //          client.buyListingSLW("2", "1000");
 //          client.simulateDeadlock();
-          client.test();
+//          client.test();
 //        client.addListing("7", "7", 280);
 //        client.readItem(List.of("10", "11", "12"));
 
+        client.TPCC_payment("1", "2", 10.0f, "1", "2", "1");
     }
 
     private void test() {
@@ -124,6 +126,114 @@ public class Client {
 //        commit(tx2);
 //        commit(tx1);
 
+    }
+
+    public boolean TPCC_payment(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
+        Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
+        if (initResult.getStatus()) {
+            String tx = initResult.getMessage();
+
+            if (!lock(tx, "warehouse", "w_id", warehouseId, WRITE_TYPE).getStatus()) {
+                rollback(tx);
+                return false;
+            }
+
+//            Get warehouse
+            Map<String, String> warehouse = read(tx, "warehouse", "w_id", warehouseId);
+            if (warehouse.isEmpty()) {
+                rollback(tx);
+                return false;
+            }
+
+
+//            update warehouse
+            float newWarehouseBalance = Float.parseFloat(warehouse.get("w_ytd"))  + paymentAmount ;
+            if (!write(tx, "warehouse", "w_id", warehouseId, "w_ytd", String.valueOf(newWarehouseBalance))) {
+                rollback(tx);
+                return false;
+            }
+
+
+            if (!lock(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, WRITE_TYPE).getStatus()) {
+                rollback(tx);
+                return false;
+            }
+
+//          get district
+            Map<String, String> district = read(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId);
+            if (district.isEmpty()) {
+                rollback(tx);
+                return false;
+            }
+
+//            Update District
+            float newDistrictBalance = Float.parseFloat(district.get("d_ytd"))  + paymentAmount;
+            if (!write(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, "d_ytd", String.valueOf(newDistrictBalance))) {
+                rollback(tx);
+                return false;
+            }
+
+//            Get customer
+            String customerIdKey = "c_w_id,c_d_id,c_id";
+            String customerIdValue = customerWarehouseId + "," + customerDistrictId + "," + customerId ;
+            if (!lock(tx, "customer", customerIdKey, customerIdValue, WRITE_TYPE).getStatus()) {
+                rollback(tx);
+                return false;
+            }
+
+
+            Map<String, String> customer = read(tx, "customer", customerIdKey, customerIdValue);
+            if (customer.isEmpty()) {
+                rollback(tx);
+                return false;
+            }
+
+            float c_balance = Float.parseFloat(customer.get("c_balance")) - paymentAmount;
+            float c_ytd_payment = Float.parseFloat(customer.get("c_ytd_payment")) + paymentAmount;
+            int c_payment_cnt = Integer.parseInt(customer.get("c_payment_cnt")) + 1;
+//            Update customer
+            if(!write(tx, "customer", customerIdKey, customerIdValue, "c_balance", String.valueOf(c_balance)) |
+                    !write(tx, "customer", customerIdKey, customerIdValue, "c_ytd_payment", String.valueOf(c_ytd_payment)) |
+                    !write(tx, "customer", customerIdKey, customerIdValue, "c_payment_cnt", String.valueOf(c_payment_cnt))) {
+                rollback(tx);
+                return false;
+            }
+            if (customer.get("c_credit").equals("BC")) {
+                String c_data = customerId + " " + customerDistrictId + " " + customerWarehouseId + " " + districtId + " " + warehouseId + " " + paymentAmount + " | " + customer.get("c_data");
+                if (c_data.length() > 500) {
+                    c_data = c_data.substring(0, 500);
+                }
+
+                if (!write(tx, "customer", customerIdKey, customerIdValue, "c_data", c_data)) {
+                    rollback(tx);
+                    return false;
+                }
+            }
+
+//            insert history
+            String historyId = customerId + "," + customerDistrictId + "," + customerWarehouseId + "," +  districtId + "," + warehouseId;
+
+            if (!insertLock(tx,"history", historyId).getStatus()) {
+                rollback(tx);
+                return false;
+            }
+
+
+            String h_data = "'" + warehouseId + ":" + districtId + "'";
+
+            if (!insert(tx, "history", "'" + new Timestamp(System.currentTimeMillis()) + "'" + "," +
+                    paymentAmount + "," +
+                    h_data, historyId)) {
+                rollback(tx);
+                return false;
+            }
+
+
+            commit(tx);
+            return true;
+        }
+
+        return false;
     }
 
     public void setServerConfig(Map<String, String> config) {
@@ -228,12 +338,12 @@ public class Client {
 
 //    remoteCalls : 4
     public String addListing(String PId, String IId, double price) {
-        if (mode.equals("slw"))
-            return addListingSLW(PId, IId, price);
-        else if (mode.equals("ww"))
-            return addListingBamboo(PId, IId, price);
-        else
-            return addListingWW(PId, IId, price);
+        return switch (mode) {
+            case "slw" -> addListingSLW(PId, IId, price);
+            case "bamboo" -> addListingBamboo(PId, IId, price);
+            case "ww" -> addListingWW(PId, IId, price);
+            default -> null;
+        };
     }
 
     public String addListingWW(String PId, String IId, double price) {
@@ -545,12 +655,12 @@ public class Client {
         return null;
     }
     public String buyListing(String PId, String LId) {
-        if (mode.equals("slw"))
-            return buyListingSLW(PId, LId);
-        else if (mode.equals("bamboo"))
-            return buyListingBamboo(PId, LId);
-        else
-            return buyListingWW(PId, LId);
+        return switch (mode) {
+            case "slw" -> buyListingSLW(PId, LId);
+            case "bamboo" -> buyListingBamboo(PId, LId);
+            case "ww" -> buyListingWW(PId, LId);
+            default -> null;
+        };
     }
     public String buyListingWW(String PId, String LId) {
 
@@ -835,7 +945,7 @@ public class Client {
     }
 
 
-    private void insert(String transactionId, String tableName, String newRecord, String recordId) {
+    private boolean insert(String transactionId, String tableName, String newRecord, String recordId) {
         Data insertData = Data.newBuilder()
                 .setTransactionId(transactionId)
                 .setType(INSERT_TYPE)
@@ -845,18 +955,20 @@ public class Client {
                 .build();
         Result result = blockingStub.update(insertData);
         log.info("insert data with id {} into {} status : {}", recordId, tableName, result.getStatus());
+        return result.getStatus();
     }
 
-    private void insert(String transactionId, String tableName, String newRecord) {
-        Data insertData = Data.newBuilder()
-                .setTransactionId(transactionId)
-                .setType(INSERT_TYPE)
-                .setKey(tableName)
-                .setValue(newRecord)
-                .build();
-        Result result = blockingStub.lockAndUpdate(insertData);
-        log.info("insert data with into {} status : {}", tableName, result.getStatus());
-    }
+//    private boolean insert(String transactionId, String tableName, String newRecord) {
+//        Data insertData = Data.newBuilder()
+//                .setTransactionId(transactionId)
+//                .setType(INSERT_TYPE)
+//                .setKey(tableName)
+//                .setValue(newRecord)
+//                .build();
+//        Result result = blockingStub.lockAndUpdate(insertData);
+//        log.info("insert data with into {} status : {}", tableName, result.getStatus());
+//        return result.getStatus();
+//    }
     private Result lock(String transactionId, String tableName, String key, String value, String type) {
         Data lockData = Data.newBuilder()
                 .setTransactionId(transactionId)
@@ -876,21 +988,7 @@ public class Client {
     }
 
     private Result lock(String transactionId, String tableName, String key, String value) {
-        Data lockData = Data.newBuilder()
-                .setTransactionId(transactionId)
-                .setType(WRITE_TYPE)
-                .setKey(tableName + "," + key + "," + value)
-                .build();
-        Result lockResult = blockingStub.lock(lockData);
-        log.info("{}, lock on {},{}:{} status: {} - message: {}",transactionId, tableName, key, value, lockResult.getStatus(), lockResult.getMessage());
-        if (locks.containsKey(transactionId)) {
-            locks.get(transactionId).add(lockData.getKey());
-        }
-        else {
-            locks.put(transactionId, new HashSet<>());
-            locks.get(transactionId).add(lockData.getKey());
-        }
-        return lockResult;
+        return lock(transactionId, tableName, key, value, WRITE_TYPE);
     }
 
     private Result insertLock(String transactionId, String tableName) {
@@ -898,6 +996,17 @@ public class Client {
                 .setTransactionId(transactionId)
                 .setType(INSERT_TYPE)
                 .setKey(tableName)
+                .build();
+        Result lockResult = blockingStub.lock(lockData);
+        log.info("lock on {} for insert status: {}", tableName, lockResult.getStatus());
+        return lockResult;
+    }
+    private Result insertLock(String transactionId, String tableName, String recordId) {
+        Data lockData = Data.newBuilder()
+                .setTransactionId(transactionId)
+                .setType(INSERT_TYPE)
+                .setKey(tableName)
+                .setRecordId(recordId)
                 .build();
         Result lockResult = blockingStub.lock(lockData);
         log.info("lock on {} for insert status: {}", tableName, lockResult.getStatus());

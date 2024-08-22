@@ -54,13 +54,19 @@ public class DBTransactionData {
 
         if (!type.equals(INSERT_TYPE)) {
             String[] keys = data.getKey().split(",");
-            if (keys.length != 3) {
+            if (keys.length < 3) {
                 log.error("could not deserialize: not enough keys in Key string");
                 return null;
             }
             d.setTable(keys[0]);
-            d.setId(keys[1]);
-            d.setQuery(Integer.parseInt(keys[2]));
+            List<String> ids = new ArrayList<>();
+            List<Integer> queries = new ArrayList<>();
+            for (int i = 1; i <= keys.length/2 ; i++) {
+                ids.add(keys[i]);
+                queries.add(Integer.parseInt(keys[i + keys.length/2]));
+            }
+            d.setIds(ids);
+            d.setQueries(queries);
         }
         else {
             d.setTable(data.getKey());

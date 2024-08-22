@@ -1,5 +1,6 @@
 package edgelab.retryFreeDB.repo.storage;
 
+import com.google.common.base.Joiner;
 import edgelab.retryFreeDB.repo.storage.DTO.DBData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBDeleteData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBInsertData;
@@ -268,7 +269,7 @@ public class Postgres implements Storage{
     private final Map<String, DBLock> locks = new HashMap<>();
     private final ConcurrentHashMap<String, Set<String>> transactionResources = new ConcurrentHashMap<>();
     public void lock(DBTransaction tx, Set<DBTransaction> toBeAborted, DBData data) throws Exception {
-        String resource = (data instanceof DBInsertData) ? data.getTable() +  ","  + ((DBInsertData) data).getRecordId() : data.getTable() +  ","  + data.getQuery();
+        String resource = getResource(data);
         DBLock lock;
         LockType lockType = LockType.WRITE;
         if (SHARED_LOCK_ENABLE)
@@ -316,6 +317,10 @@ public class Postgres implements Storage{
         }
 
         delay(LOCK_THINKING_TIME);
+    }
+
+    private static String getResource(DBData data) {
+        return (data instanceof DBInsertData) ? data.getTable() + "," + ((DBInsertData) data).getRecordId() : data.getTable() + "," + Joiner.on(",").join(data.getQueries());
     }
 
     private void addNewResourceForTransaction(String tx, String resource) {
@@ -436,7 +441,7 @@ public class Postgres implements Storage{
 
 
     public void unlock(DBTransaction tx, DBData data, Set<DBTransaction> toBeAborted) throws SQLException {
-        String resource = (data instanceof DBInsertData) ? data.getTable() +  ","  + ((DBInsertData) data).getRecordId() : data.getTable() +  ","  + data.getQuery();
+        String resource = getResource(data);
         releaseLock(tx, resource, toBeAborted);
     }
 
@@ -528,7 +533,7 @@ public class Postgres implements Storage{
             throw new Exception("Bamboo is not enabled!");
 
 
-        String resource = (data instanceof DBInsertData) ? data.getTable() +  ","  + ((DBInsertData) data).getRecordId() : data.getTable() +  ","  + data.getQuery();
+        String resource = getResource(data);
         DBLock lock;
 
         log.info("{}, retiring the lock {}", tx, resource);
@@ -622,10 +627,17 @@ public class Postgres implements Storage{
     }
     public void remove(Connection conn, DBDeleteData data) throws SQLException {
 
-        String SQL = "DELETE FROM "+ data.getTable() +" WHERE " + data.getId() + " = ?";
+        String SQL = "DELETE FROM "+ data.getTable() +" WHERE ";
+        for (int i = 0 ; i < data.getIds().size(); i++) {
+            if (i != 0)
+                SQL += "AND ";
+            SQL += data.getIds().get(i) + " = ? ";
+        }
+
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
-            pstmt.setInt(1, data.getQuery());
+            for (int i = 1; i <= data.getQueries().size() ; i++)
+                pstmt.setInt(i, data.getQueries().get(i-1));
             pstmt.executeUpdate();
             delay(OPERATION_THINKING_TIME);
         } catch (SQLException e) {
@@ -635,11 +647,18 @@ public class Postgres implements Storage{
     }
 
     public void update(Connection conn, DBWriteData data) throws SQLException {
-        String SQL = "UPDATE " + data.getTable() + " SET  " + data.getVariable() + " = " + data.getValue() + " WHERE "+ data.getId() +" = ?";
-        log.info("update {}:<{}, {}>", data.getTable(), data.getId(), data.getQuery());
+        String SQL = "UPDATE " + data.getTable() + " SET  " + data.getVariable() + " = " + data.getValue() + " WHERE ";
+        for (int i = 0 ; i < data.getIds().size(); i++) {
+            if (i != 0)
+                SQL += "AND ";
+            SQL += data.getIds().get(i) + " = ? ";
+        }
+
+        log.info("update {}:<{}, {}>", data.getTable(), data.getIds(), data.getQueries());
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
-            pstmt.setInt(1, data.getQuery());
+            for (int i = 1; i <= data.getQueries().size() ; i++)
+                pstmt.setInt(i, data.getQueries().get(i-1));
             pstmt.executeUpdate();
             delay(OPERATION_THINKING_TIME);
         } catch (SQLException e) {
@@ -651,11 +670,17 @@ public class Postgres implements Storage{
 
     public String get(Connection conn, DBData data) throws SQLException {
         StringBuilder value = new StringBuilder();
-        String SQL = "SELECT * FROM "+ data.getTable() +" WHERE "+data.getId()+" = ?";
-        log.info("get {}:{}", data.getTable(), data.getId());
+        String SQL = "SELECT * FROM "+ data.getTable() +" WHERE ";
+        for (int i = 0 ; i < data.getIds().size(); i++) {
+            if (i != 0)
+                SQL += "AND ";
+            SQL += data.getIds().get(i) + " = ? ";
+        }
+        log.info("get {}:{}", data.getTable(), data.getIds());
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
-            pstmt.setInt(1, data.getQuery());
+            for (int i = 1; i <= data.getQueries().size() ; i++)
+                pstmt.setInt(i, data.getQueries().get(i-1));
             ResultSet rs = pstmt.executeQuery();
             ResultSetMetaData metaData = rs.getMetaData();
             int columnCount = metaData.getColumnCount();
