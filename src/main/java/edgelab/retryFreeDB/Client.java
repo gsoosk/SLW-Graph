@@ -72,36 +72,57 @@ public class Client {
 //            lock(tx3, "Players", "PId", "10", WRITE_TYPE);
 //            retireLock(tx3, "Players", "PId", "10");
 
-            lock(tx5, "Players", "PId", "10", WRITE_TYPE);
-            retireLock(tx5, "Players", "PId", "10");
+            try {
+                lock(tx5, "Players", "PId", "10", WRITE_TYPE);
 
-            lock(tx6, "Players", "PId", "10", WRITE_TYPE);
-            retireLock(tx6, "Players", "PId", "10");
+                retireLock(tx5, "Players", "PId", "10");
+
+                lock(tx6, "Players", "PId", "10", WRITE_TYPE);
+                retireLock(tx6, "Players", "PId", "10");
 
 
-            lock(tx4, "Players", "PId", "10", WRITE_TYPE);
+                lock(tx4, "Players", "PId", "10", WRITE_TYPE);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
 
 
         });
         delay();
 
         executor.submit(() -> {
-            waitForCommit(tx5);
+            try {
+                waitForCommit(tx5);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
             commit(tx5);
         });
 
         executor.submit(() -> {
-            waitForCommit(tx4);
+            try {
+                waitForCommit(tx4);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
             commit(tx4);
         });
 
         executor.submit(() -> {
-            waitForCommit(tx3);
+            try {
+                waitForCommit(tx3);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
             commit(tx3);
         });
 
         executor.submit(() -> {
-            waitForCommit(tx6);
+            try {
+                waitForCommit(tx6);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
             commit(tx6);
         });
 //        executor.submit(()->  lock(tx2, "Players", "PId", "11", WRITE_TYPE));
@@ -132,105 +153,70 @@ public class Client {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String tx = initResult.getMessage();
-
-            if (!lock(tx, "warehouse", "w_id", warehouseId, WRITE_TYPE).getStatus()) {
-                rollback(tx);
-                return false;
-            }
+            try {
+                lock(tx, "warehouse", "w_id", warehouseId, WRITE_TYPE);
 
 //            Get warehouse
-            Map<String, String> warehouse = read(tx, "warehouse", "w_id", warehouseId);
-            if (warehouse.isEmpty()) {
-                rollback(tx);
-                return false;
-            }
-
-
-//            update warehouse
-            float newWarehouseBalance = Float.parseFloat(warehouse.get("w_ytd"))  + paymentAmount ;
-            if (!write(tx, "warehouse", "w_id", warehouseId, "w_ytd", String.valueOf(newWarehouseBalance))) {
-                rollback(tx);
-                return false;
-            }
-
-
-            if (!lock(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, WRITE_TYPE).getStatus()) {
-                rollback(tx);
-                return false;
-            }
-
-//          get district
-            Map<String, String> district = read(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId);
-            if (district.isEmpty()) {
-                rollback(tx);
-                return false;
-            }
-
-//            Update District
-            float newDistrictBalance = Float.parseFloat(district.get("d_ytd"))  + paymentAmount;
-            if (!write(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, "d_ytd", String.valueOf(newDistrictBalance))) {
-                rollback(tx);
-                return false;
-            }
-
-//            Get customer
-            String customerIdKey = "c_w_id,c_d_id,c_id";
-            String customerIdValue = customerWarehouseId + "," + customerDistrictId + "," + customerId ;
-            if (!lock(tx, "customer", customerIdKey, customerIdValue, WRITE_TYPE).getStatus()) {
-                rollback(tx);
-                return false;
-            }
-
-
-            Map<String, String> customer = read(tx, "customer", customerIdKey, customerIdValue);
-            if (customer.isEmpty()) {
-                rollback(tx);
-                return false;
-            }
-
-            float c_balance = Float.parseFloat(customer.get("c_balance")) - paymentAmount;
-            float c_ytd_payment = Float.parseFloat(customer.get("c_ytd_payment")) + paymentAmount;
-            int c_payment_cnt = Integer.parseInt(customer.get("c_payment_cnt")) + 1;
-//            Update customer
-            if(!write(tx, "customer", customerIdKey, customerIdValue, "c_balance", String.valueOf(c_balance)) |
-                    !write(tx, "customer", customerIdKey, customerIdValue, "c_ytd_payment", String.valueOf(c_ytd_payment)) |
-                    !write(tx, "customer", customerIdKey, customerIdValue, "c_payment_cnt", String.valueOf(c_payment_cnt))) {
-                rollback(tx);
-                return false;
-            }
-            if (customer.get("c_credit").equals("BC")) {
-                String c_data = customerId + " " + customerDistrictId + " " + customerWarehouseId + " " + districtId + " " + warehouseId + " " + paymentAmount + " | " + customer.get("c_data");
-                if (c_data.length() > 500) {
-                    c_data = c_data.substring(0, 500);
-                }
-
-                if (!write(tx, "customer", customerIdKey, customerIdValue, "c_data", c_data)) {
-                    rollback(tx);
+                Map<String, String> warehouse = read(tx, "warehouse", "w_id", warehouseId);
+                if (warehouse.isEmpty()) {
+                    log.info("warehouse does not exists");
+                    commit(tx);
                     return false;
                 }
-            }
 
-//            insert history
-            String historyId = customerId + "," + customerDistrictId + "," + customerWarehouseId + "," +  districtId + "," + warehouseId;
+//            update warehouse
+                float newWarehouseBalance = Float.parseFloat(warehouse.get("w_ytd")) + paymentAmount;
+                write(tx, "warehouse", "w_id", warehouseId, "w_ytd", String.valueOf(newWarehouseBalance)) ;
 
-            if (!insertLock(tx,"history", historyId).getStatus()) {
+
+                lock(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, WRITE_TYPE);
+//          get district
+                Map<String, String> district = read(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId);
+                if (district.isEmpty())
+                    throw new Exception("district does not exists");
+    //            Update District
+                float newDistrictBalance = Float.parseFloat(district.get("d_ytd")) + paymentAmount;
+                write(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, "d_ytd", String.valueOf(newDistrictBalance)) ;
+
+    //            Get customer
+                String customerIdKey = "c_w_id,c_d_id,c_id";
+                String customerIdValue = customerWarehouseId + "," + customerDistrictId + "," + customerId;
+                lock(tx, "customer", customerIdKey, customerIdValue, WRITE_TYPE);
+                Map<String, String> customer = read(tx, "customer", customerIdKey, customerIdValue);
+                if (customer.isEmpty())
+                    throw new Exception("customer does not exists");
+
+//            Update customer
+                float c_balance = Float.parseFloat(customer.get("c_balance")) - paymentAmount;
+                float c_ytd_payment = Float.parseFloat(customer.get("c_ytd_payment")) + paymentAmount;
+                int c_payment_cnt = Integer.parseInt(customer.get("c_payment_cnt")) + 1;
+                write(tx, "customer", customerIdKey, customerIdValue, "c_balance", String.valueOf(c_balance));
+                write(tx, "customer", customerIdKey, customerIdValue, "c_ytd_payment", String.valueOf(c_ytd_payment));
+                write(tx, "customer", customerIdKey, customerIdValue, "c_payment_cnt", String.valueOf(c_payment_cnt));
+                if (customer.get("c_credit").equals("BC")) {
+                    String c_data = customerId + " " + customerDistrictId + " " + customerWarehouseId + " " + districtId + " " + warehouseId + " " + paymentAmount + " | " + customer.get("c_data");
+                    if (c_data.length() > 500) {
+                        c_data = c_data.substring(0, 500);
+                    }
+
+                    write(tx, "customer", customerIdKey, customerIdValue, "c_data", c_data);
+                }
+
+    //            insert history
+                String historyId = customerId + "," + customerDistrictId + "," + customerWarehouseId + "," + districtId + "," + warehouseId;
+                insertLock(tx, "history", historyId);
+                String h_data = "'" + warehouseId + ":" + districtId + "'";
+                insert(tx, "history", "'" + new Timestamp(System.currentTimeMillis()) + "'" + "," +
+                        paymentAmount + "," +
+                        h_data, historyId) ;
+
+
+                commit(tx);
+                return true;
+            } catch (Exception e) {
                 rollback(tx);
                 return false;
             }
-
-
-            String h_data = "'" + warehouseId + ":" + districtId + "'";
-
-            if (!insert(tx, "history", "'" + new Timestamp(System.currentTimeMillis()) + "'" + "," +
-                    paymentAmount + "," +
-                    h_data, historyId)) {
-                rollback(tx);
-                return false;
-            }
-
-
-            commit(tx);
-            return true;
         }
 
         return false;
@@ -265,26 +251,25 @@ public class Client {
     }
 
     private boolean readItems(List<String> items, String tx) {
-        for (String IId:
-                items) {
-            if (!lock(tx, "Items", "IId", IId, READ_TYPE).getStatus()) {
-                rollback(tx);
-                return true;
-            }
+        try {
+            for (String IId :
+                    items) {
+                lock(tx, "Items", "IId", IId, READ_TYPE);
+                Map<String, String> item = read(tx, "Items", "IId", IId);
 
-            Map<String, String> item = read(tx, "Items", "IId", IId);
-            if (item.isEmpty()) {
-                rollback(tx);
-                return true;
             }
-
+        } catch (Exception e) {
+            rollback(tx);
+            return true;
         }
         return false;
     }
 
     private boolean readItemBamboo(List<String> items, String tx) {
         if (readItems(items, tx)) return true;
-        if (!waitForCommit(tx).getStatus()) {
+        try {
+           waitForCommit(tx);
+        } catch (Exception e) {
             rollback(tx);
             return true;
         }
@@ -300,15 +285,21 @@ public class Client {
         delay();
         executor.submit(() -> lock(tx2, "Players", "PId", "11"));
         delay();
-        executor.submit(() -> { if (!lock(tx1, "Players", "PId", "11").getStatus())
-                                    rollback(tx1);
+        executor.submit(() -> {
+            try {
+                lock(tx1, "Players", "PId", "11");
+            } catch (Exception e) {
+                rollback(tx1);
+            }
         });
         delay();
         executor.submit(() -> {
 
-            if (!lock(tx2, "Players", "PId", "10").getStatus()) {
+            try {
+                lock(tx2, "Players", "PId", "10");
+            } catch (Exception e) {
                 rollback(tx2);
-            };
+            }
         });// DEADLOCK
 
 
@@ -351,6 +342,7 @@ public class Client {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
+            try {
 //
 //            Map<String, String> listing = read(transactionId, "Listings", "LIId", IId);
 ////            Check no listing exists with the item id
@@ -360,44 +352,38 @@ public class Client {
 //                return;
 //            }
 
-            if (!lock(transactionId, "Items", "IId", IId, READ_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            Map<String, String> item = read(transactionId, "Items", "IId", IId);
-            if (item.isEmpty()) {
-                log.info("Item does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                lock(transactionId, "Items", "IId", IId, READ_TYPE);
+                Map<String, String> item = read(transactionId, "Items", "IId", IId);
+                if (item.isEmpty()) {
+                    log.info("Item does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 //             Check the owner
-            if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
-                log.info("item has a different owner! {}<>{}", item.get("iowner"), PId);
-                commit(transactionId);
-                return null;
-            }
+                if (Integer.parseInt(item.get("iowner")) != Integer.parseInt(PId)) {
+                    log.info("item has a different owner! {}<>{}", item.get("iowner"), PId);
+                    commit(transactionId);
+                    return null;
+                }
 
-            if (!lock(transactionId, "Players", "PId", PId, READ_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            Map<String, String> player = read(transactionId, "Players", "PId", PId);
+                lock(transactionId, "Players", "PId", PId, READ_TYPE);
+                Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
-            if (player.isEmpty()) {
-                log.info("player does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                if (player.isEmpty()) {
+                    log.info("player does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
-            Result insertListingResult = insertLock(transactionId, "Listings");
-            if (!insertListingResult.getStatus()) {
+                Result insertListingResult = insertLock(transactionId, "Listings");
+                String listingRecordId = insertListingResult.getMessage();
+                insert(transactionId, "Listings", IId + "," + price, listingRecordId);
+                commit(transactionId);
+                return listingRecordId;
+            } catch (Exception e) {
                 rollback(transactionId);
                 return null;
             }
-            String listingRecordId = insertListingResult.getMessage();
-            insert(transactionId, "Listings",  IId + "," + price, listingRecordId);
-            commit(transactionId);
-            return listingRecordId;
         }
 
         return null;
@@ -410,6 +396,7 @@ public class Client {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
+            try {
 //
 //            Map<String, String> listing = read(transactionId, "Listings", "LIId", IId);
 ////            Check no listing exists with the item id
@@ -419,51 +406,42 @@ public class Client {
 //                return;
 //            }
 
-            if (!lock(transactionId, "Items", "IId", IId, READ_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            Map<String, String> item = read(transactionId, "Items", "IId", IId);
-            if (item.isEmpty()) {
-                log.info("Item does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                lock(transactionId, "Items", "IId", IId, READ_TYPE);
+                Map<String, String> item = read(transactionId, "Items", "IId", IId);
+                if (item.isEmpty()) {
+                    log.info("Item does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 //             Check the owner
-            if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
-                log.info("item has a different owner! {}<>{}", item.get("iowner"), PId);
-                commit(transactionId);
-                return null;
-            }
+                if (Integer.parseInt(item.get("iowner")) != Integer.parseInt(PId)) {
+                    log.info("item has a different owner! {}<>{}", item.get("iowner"), PId);
+                    commit(transactionId);
+                    return null;
+                }
 
 
-            if (!lock(transactionId, "Players", "PId", PId, READ_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            Map<String, String> player = read(transactionId, "Players", "PId", PId);
+                lock(transactionId, "Players", "PId", PId, READ_TYPE);
+                Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
-            if (player.isEmpty()) {
-                log.info("player does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                if (player.isEmpty()) {
+                    log.info("player does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
-            Result insertListingResult = insertLock(transactionId, "Listings");
-            if (!insertListingResult.getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            String listingRecordId = insertListingResult.getMessage();
-            insert(transactionId, "Listings",  IId + "," + price, listingRecordId);
+                Result insertListingResult = insertLock(transactionId, "Listings");
+                String listingRecordId = insertListingResult.getMessage();
+                insert(transactionId, "Listings", IId + "," + price, listingRecordId);
 //
-            if (!waitForCommit(transactionId).getStatus()) {
+                waitForCommit(transactionId);
+
+                commit(transactionId);
+                return listingRecordId;
+            } catch (Exception e) {
                 rollback(transactionId);
                 return null;
             }
-
-            commit(transactionId);
-            return listingRecordId;
         }
 
         return null;
@@ -477,135 +455,104 @@ public class Client {
 
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
+            try {
 
-            //            R from L where Lid
-            if (!lock(transactionId, "Listings", "LId", LId, READ_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
+                //            R from L where Lid
+                lock(transactionId, "Listings", "LId", LId, READ_TYPE);
+                Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
 //            Check player exists
-            if (listing.isEmpty()) {
-                log.info("listing does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                if (listing.isEmpty()) {
+                    log.info("listing does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
-            //            Read from P where pid
-            if (!lock(transactionId, "Players", "PId", PId, READ_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
+                //            Read from P where pid
+                lock(transactionId, "Players", "PId", PId, READ_TYPE);
 //            TODO: WE MIGHT NEED TO ROLLBACK
-            Map<String, String> player = read(transactionId, "Players", "PId", PId);
+                Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
-            if (player.isEmpty()) {
-                log.info("player does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                if (player.isEmpty()) {
+                    log.info("player does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
-            //            Check players cash for listing
-            if (Double.parseDouble(player.get("pcash")) < Double.parseDouble(listing.get("lprice"))) {
-                log.info("player does not have enough cash");
-                commit(transactionId);
-                return null;
-            }
+                //            Check players cash for listing
+                if (Double.parseDouble(player.get("pcash")) < Double.parseDouble(listing.get("lprice"))) {
+                    log.info("player does not have enough cash");
+                    commit(transactionId);
+                    return null;
+                }
 
 
 //            Read from I where LIID
-            if (!lock(transactionId, "Items", "IId", listing.get("liid"), READ_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
-            //            Check item exists
-            if (item.isEmpty()) {
-                log.info("item does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                lock(transactionId, "Items", "IId", listing.get("liid"), READ_TYPE);
+                Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
+                //            Check item exists
+                if (item.isEmpty()) {
+                    log.info("item does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
 
 //            Delete from L where LID
-            if (!lock(transactionId, "Listings", "LId", LId, WRITE_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            delete(transactionId, "Listings", "LId", LId);
+                lock(transactionId, "Listings", "LId", LId, WRITE_TYPE);
+                delete(transactionId, "Listings", "LId", LId);
 
 
 //            R from P where ppid
-            String PPId = item.get("iowner");
-            if (!lock(transactionId, "Players", "PId", PPId, READ_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            Map<String, String> prevOwner = read(transactionId, "Players", "PId", PPId);
-            //            Check prevOwner exists
-            if (prevOwner.isEmpty()) {
-                log.info("previous owner does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                String PPId = item.get("iowner");
+                lock(transactionId, "Players", "PId", PPId, READ_TYPE);
+                Map<String, String> prevOwner = read(transactionId, "Players", "PId", PPId);
+                //            Check prevOwner exists
+                if (prevOwner.isEmpty()) {
+                    log.info("previous owner does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
 //          W into I where IId = Liid SET Iowner = pid
-            if (!lock(transactionId, "Items", "IId", listing.get("liid"), WRITE_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            if (!write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId)) {
-                rollback(transactionId);
-                return null;
-            }
+                lock(transactionId, "Items", "IId", listing.get("liid"), WRITE_TYPE);
+                write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId);
 
-            if (!retireLock(transactionId, "Items", "IId", listing.get("liid")).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
+
+                retireLock(transactionId, "Items", "IId", listing.get("liid"));
 
 //           W into P where Pid SET pCash = new Cash
-            if (!lock(transactionId, "Players", "PId", PId, WRITE_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            String newCash = Double.toString(Double.parseDouble(player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
-            if (!write(transactionId, "Players", "PId", PId, "Pcash", newCash)) {
-                rollback(transactionId);
-                return null;
-            }
+                lock(transactionId, "Players", "PId", PId, WRITE_TYPE);
+                String newCash = Double.toString(Double.parseDouble(player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
+                write(transactionId, "Players", "PId", PId, "Pcash", newCash);
 
 //           W into P where Pid SET pCash = new Cash
-            if (!lock(transactionId, "Players", "PId", PPId, WRITE_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            String prevOwnerNewCash = Double.toString(Double.parseDouble(prevOwner.get("pcash")) + Double.parseDouble(listing.get("lprice")));
-            if (!write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash)) {
-                rollback(transactionId);
-                return null;
-            }
+                lock(transactionId, "Players", "PId", PPId, WRITE_TYPE);
+                String prevOwnerNewCash = Double.toString(Double.parseDouble(prevOwner.get("pcash")) + Double.parseDouble(listing.get("lprice")));
+                write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash);
 
 
-            if (!waitForCommit(transactionId).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
+                waitForCommit(transactionId);
 
 //            Unlock
-            commit(transactionId);
-            return listing.get("liid");
+                commit(transactionId);
+                return listing.get("liid");
+            } catch (Exception e) {
+                rollback(transactionId);
+                return null;
+            }
         }
         return null;
     }
 
-    private Result waitForCommit(String transactionId) {
+    private Result waitForCommit(String transactionId) throws Exception {
         Result result = blockingStub.bambooWaitForCommit(TransactionId.newBuilder().setId(transactionId).build());
         log.info("{}, waitForCommit status: {} - message: {}",transactionId, result.getStatus(), result.getMessage());
+        if (!result.getStatus())
+            throw new Exception(result.getMessage());
         return result;
     }
 
-    private Result retireLock(String transactionId, String tableName, String key, String value) {
+    private Result retireLock(String transactionId, String tableName, String key, String value) throws Exception {
         Data lockData = Data.newBuilder()
                 .setTransactionId(transactionId)
                 .setType(WRITE_TYPE)
@@ -613,6 +560,8 @@ public class Client {
                 .build();
         Result retireResult = blockingStub.bambooRetireLock(lockData);
         log.info("{}, retire the lock {},{}:{} status: {} - message: {}",transactionId, tableName, key, value, retireResult.getStatus(), retireResult.getMessage());
+        if (!retireResult.getStatus())
+            throw new Exception(retireResult.getMessage());
         return retireResult;
     }
     private void rollback(String transactionId) {
@@ -626,31 +575,36 @@ public class Client {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
+            try {
+                String listingRecordId = insertLock(transactionId, "Listings").getMessage();
 
-            String listingRecordId = insertLock(transactionId, "Listings").getMessage();
-
-            lock(transactionId, "Items", "IId", IId, READ_TYPE);
-            Map<String, String> item = read(transactionId, "Items", "IId", IId);
+                lock(transactionId, "Items", "IId", IId, READ_TYPE);
+                Map<String, String> item = read(transactionId, "Items", "IId", IId);
 //             Check the owner
-            if (Integer.parseInt( item.get("iowner")) != Integer.parseInt(PId)) {
-                log.error("item has a different owner! {}<>{}", item.get("iowner"), PId);
-                commit(transactionId);
-                return null;
-            }
+                if (Integer.parseInt(item.get("iowner")) != Integer.parseInt(PId)) {
+                    log.error("item has a different owner! {}<>{}", item.get("iowner"), PId);
+                    commit(transactionId);
+                    return null;
+                }
 
-            lock(transactionId, "Players", "PId", PId, READ_TYPE);
-            unlock(transactionId, "Items", "IId", IId);
-            Map<String, String> player = read(transactionId, "Players", "PId", PId);
+                lock(transactionId, "Players", "PId", PId, READ_TYPE);
+                unlock(transactionId, "Items", "IId", IId);
+                Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
-            if (player.isEmpty()) {
-                log.error("player does not exists!");
+                if (player.isEmpty()) {
+                    log.error("player does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
+
+                insert(transactionId, "Listings", IId + "," + price, listingRecordId);
                 commit(transactionId);
+                return listingRecordId;
+            } catch (Exception e) {
+                log.error(e.getMessage());
+                rollback(transactionId);
                 return null;
             }
-
-            insert(transactionId, "Listings",  IId + "," + price, listingRecordId);
-            commit(transactionId);
-            return listingRecordId;
         }
         return null;
     }
@@ -668,113 +622,85 @@ public class Client {
 
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
+            try {
 
-        //            R from L where Lid
-            if (!lock(transactionId, "Listings", "LId", LId, READ_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
+                //            R from L where Lid
+                lock(transactionId, "Listings", "LId", LId, READ_TYPE);
+                Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
 //            Check player exists
-            if (listing.isEmpty()) {
-                log.info("listing does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                if (listing.isEmpty()) {
+                    log.info("listing does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
-            //            Read from P where pid
-            if(!lock(transactionId, "Players", "PId", PId, READ_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
+                //            Read from P where pid
+                lock(transactionId, "Players", "PId", PId, READ_TYPE);
 //            TODO: WE MIGHT NEED TO ROLLBACK
-            Map<String, String> player = read(transactionId, "Players", "PId", PId);
+                Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
-            if (player.isEmpty()) {
-                log.info("player does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                if (player.isEmpty()) {
+                    log.info("player does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
-            //            Check players cash for listing
-            if (Double.parseDouble( player.get("pcash")) < Double.parseDouble(listing.get("lprice"))){
-                log.info("player does not have enough cash");
-                commit(transactionId);
-                return null;
-            }
+                //            Check players cash for listing
+                if (Double.parseDouble(player.get("pcash")) < Double.parseDouble(listing.get("lprice"))) {
+                    log.info("player does not have enough cash");
+                    commit(transactionId);
+                    return null;
+                }
 
 
 //            Read from I where LIID
-            if (!lock(transactionId, "Items", "IId", listing.get("liid"), READ_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
-            //            Check item exists
-            if (item.isEmpty()) {
-                log.info("item does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                lock(transactionId, "Items", "IId", listing.get("liid"), READ_TYPE);
+                Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
+                //            Check item exists
+                if (item.isEmpty()) {
+                    log.info("item does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
 
 //            Delete from L where LID
-            if (!lock(transactionId, "Listings", "LId", LId, WRITE_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            delete(transactionId, "Listings", "LId", LId);
+                lock(transactionId, "Listings", "LId", LId, WRITE_TYPE);
+                delete(transactionId, "Listings", "LId", LId);
 
 
 //            R from P where ppid
-            String PPId =  item.get("iowner");
-            if (!lock(transactionId, "Players", "PId", PPId, READ_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            Map<String, String> prevOwner = read(transactionId, "Players", "PId", PPId);
-            //            Check prevOwner exists
-            if (prevOwner.isEmpty()) {
-                log.info("previous owner does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                String PPId = item.get("iowner");
+                lock(transactionId, "Players", "PId", PPId, READ_TYPE);
+                Map<String, String> prevOwner = read(transactionId, "Players", "PId", PPId);
+                //            Check prevOwner exists
+                if (prevOwner.isEmpty()) {
+                    log.info("previous owner does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
 //          W into I where IId = Liid SET Iowner = pid
-            if (!lock(transactionId, "Items", "IId", listing.get("liid"), WRITE_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            if (!write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId)) {
-                rollback(transactionId);
-                return null;
-            }
+                lock(transactionId, "Items", "IId", listing.get("liid"), WRITE_TYPE);
+                write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId);
 
 //           W into P where Pid SET pCash = new Cash
-            if (!lock(transactionId, "Players", "PId", PId, WRITE_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            String newCash = Double.toString(Double.parseDouble( player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
-            if(!write(transactionId, "Players", "PId", PId, "Pcash", newCash)) {
-                rollback(transactionId);
-                return null;
-            }
+                lock(transactionId, "Players", "PId", PId, WRITE_TYPE);
+                String newCash = Double.toString(Double.parseDouble(player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
+                write(transactionId, "Players", "PId", PId, "Pcash", newCash);
 
 //           W into P where Pid SET pCash = new Cash
-            if (!lock(transactionId, "Players", "PId", PPId, WRITE_TYPE).getStatus()) {
-                rollback(transactionId);
-                return null;
-            }
-            String prevOwnerNewCash = Double.toString(Double.parseDouble( prevOwner.get("pcash")) + Double.parseDouble(listing.get("lprice")));
-            if(!write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash)) {
-                rollback(transactionId);
-                return null;
-            }
+                lock(transactionId, "Players", "PId", PPId, WRITE_TYPE).getStatus();
+                String prevOwnerNewCash = Double.toString(Double.parseDouble(prevOwner.get("pcash")) + Double.parseDouble(listing.get("lprice")));
+                write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash);
 
 //            Unlock
-            commit(transactionId);
-            return listing.get("liid");
+                commit(transactionId);
+                return listing.get("liid");
+            } catch (Exception e) {
+                rollback(transactionId);
+                return null;
+            }
         }
         return null;
     }
@@ -785,90 +711,93 @@ public class Client {
 
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
-            //            R from L where Lid
-            lock(transactionId, "Listings", "LId", LId);
-            Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
+            try {
+                //            R from L where Lid
+                lock(transactionId, "Listings", "LId", LId);
+                Map<String, String> listing = read(transactionId, "Listings", "LId", LId);
 //            Check player exists
-            if (listing.isEmpty()) {
-                log.error("listing does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                if (listing.isEmpty()) {
+                    log.error("listing does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
 //            Read from I where LIID
-            lock(transactionId, "Items", "IId",  listing.get("liid"));
-            Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
-            //            Check item exists
-            if (item.isEmpty()) {
-                log.error("item does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                lock(transactionId, "Items", "IId", listing.get("liid"));
+                Map<String, String> item = read(transactionId, "Items", "IId", listing.get("liid"));
+                //            Check item exists
+                if (item.isEmpty()) {
+                    log.error("item does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
 //            Lock Players where pid, ppid
-            String PPId =  item.get("iowner");
-            if (Integer.parseInt(PPId) > Integer.parseInt(PId)) {
-                lock(transactionId, "Players", "PId", PId);
-                lock(transactionId, "Players", "PId", PPId);
-            }
-            else {
-                lock(transactionId, "Players", "PId", PPId);
-                lock(transactionId, "Players", "PId", PId);
-            }
+                String PPId = item.get("iowner");
+                if (Integer.parseInt(PPId) > Integer.parseInt(PId)) {
+                    lock(transactionId, "Players", "PId", PId);
+                    lock(transactionId, "Players", "PId", PPId);
+                } else {
+                    lock(transactionId, "Players", "PId", PPId);
+                    lock(transactionId, "Players", "PId", PId);
+                }
 
-            //            Read from P where pid
-            Map<String, String> player = read(transactionId, "Players", "PId", PId);
+                //            Read from P where pid
+                Map<String, String> player = read(transactionId, "Players", "PId", PId);
 //            Check player exists
-            if (player.isEmpty()) {
-                log.error("player does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                if (player.isEmpty()) {
+                    log.error("player does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
-            //            Check players cash for listing
-            if (Double.parseDouble( player.get("pcash")) < Double.parseDouble(listing.get("lprice"))){
-                log.error("player does not have enough cash");
-                commit(transactionId);
-                return null;
-            }
-
-
-            Map<String, String> prevOwner = read(transactionId, "Players", "PId", PPId);
-            //            Check prevOwner exists
-            if (prevOwner.isEmpty()) {
-                log.error("previous owner does not exists!");
-                commit(transactionId);
-                return null;
-            }
+                //            Check players cash for listing
+                if (Double.parseDouble(player.get("pcash")) < Double.parseDouble(listing.get("lprice"))) {
+                    log.error("player does not have enough cash");
+                    commit(transactionId);
+                    return null;
+                }
 
 
+                Map<String, String> prevOwner = read(transactionId, "Players", "PId", PPId);
+                //            Check prevOwner exists
+                if (prevOwner.isEmpty()) {
+                    log.error("previous owner does not exists!");
+                    commit(transactionId);
+                    return null;
+                }
 
 
 //            Delete from L where LID
-            delete(transactionId, "Listings", "LId", LId);
+                delete(transactionId, "Listings", "LId", LId);
 //            unlock(transactionId, "Listings", "LId", LId);
 
 //          W into I where IId = Liid SET Iowner = pid
-            write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId);
-            unlock(transactionId, "Items", "IId", listing.get("liid"));
+                write(transactionId, "Items", "IId", listing.get("liid"), "IOwner", PId);
+                unlock(transactionId, "Items", "IId", listing.get("liid"));
 
 //            delay(3000);
 //           W into P where Pid SET pCash = new Cash
-            String newCash = Double.toString(Double.parseDouble( player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
-            write(transactionId, "Players", "PId", PId, "Pcash", newCash);
+                String newCash = Double.toString(Double.parseDouble(player.get("pcash")) - Double.parseDouble(listing.get("lprice")));
+                write(transactionId, "Players", "PId", PId, "Pcash", newCash);
 
 //           W into P where Pid SET pCash = new Cash
-            String prevOwnerNewCash = Double.toString(Double.parseDouble( prevOwner.get("pcash")) + Double.parseDouble(listing.get("lprice")));
-            write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash);
+                String prevOwnerNewCash = Double.toString(Double.parseDouble(prevOwner.get("pcash")) + Double.parseDouble(listing.get("lprice")));
+                write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash);
 
 //            Unlock
-            commit(transactionId);
-            return listing.get("liid");
+                commit(transactionId);
+                return listing.get("liid");
+            } catch (Exception e) {
+                log.error(e.getMessage());
+                rollback(transactionId);
+                return null;
+            }
         }
         return null;
     }
 
-    private Result unlock(String transactionId, String tableName, String key, String value) {
+    private Result unlock(String transactionId, String tableName, String key, String value) throws Exception {
         Data lockData = Data.newBuilder()
                 .setTransactionId(transactionId)
                 .setType(READ_TYPE)
@@ -879,6 +808,8 @@ public class Client {
         if (locks.containsKey(transactionId)) {
             locks.get(transactionId).remove(lockData.getKey());
         }
+        if (!unlockResult.getStatus())
+            throw new Exception(unlockResult.getMessage());
         return unlockResult;
     }
 
@@ -911,7 +842,7 @@ public class Client {
         return commitResult;
     }
 
-    private boolean write(String transactionId, String tableName, String key, String value, String newKey, String newValue) {
+    private void write(String transactionId, String tableName, String key, String value, String newKey, String newValue) throws Exception {
         Data writeData = Data.newBuilder()
                 .setTransactionId(transactionId)
                 .setType(WRITE_TYPE)
@@ -920,16 +851,19 @@ public class Client {
                 .build();
         Result writeResult = performRemoteOperation(writeData);
         log.info("Write to {} status: {}", tableName, writeResult.getStatus());
-        return writeResult.getStatus();
+        if (!writeResult.getStatus())
+            throw new Exception(writeResult.getMessage());
     }
 
-    private void delete(String transactionId, String tableName, String key, String value) {
+    private void delete(String transactionId, String tableName, String key, String value) throws Exception {
         Data deleteData = Data.newBuilder()
                 .setTransactionId(transactionId)
                 .setType(DELETE_TYPE)
                 .setKey(tableName + "," + key + "," + value)
                 .build();
         Result deleteResult = performRemoteOperation(deleteData);
+        if (!deleteResult.getStatus())
+            throw new Exception(deleteResult.getMessage());
         log.info("delete from {} status: {}", tableName, deleteResult.getStatus());
     }
 
@@ -945,7 +879,7 @@ public class Client {
     }
 
 
-    private boolean insert(String transactionId, String tableName, String newRecord, String recordId) {
+    private void insert(String transactionId, String tableName, String newRecord, String recordId) throws Exception {
         Data insertData = Data.newBuilder()
                 .setTransactionId(transactionId)
                 .setType(INSERT_TYPE)
@@ -955,7 +889,8 @@ public class Client {
                 .build();
         Result result = blockingStub.update(insertData);
         log.info("insert data with id {} into {} status : {}", recordId, tableName, result.getStatus());
-        return result.getStatus();
+        if (!result.getStatus())
+            throw new Exception(result.getMessage());
     }
 
 //    private boolean insert(String transactionId, String tableName, String newRecord) {
@@ -969,7 +904,7 @@ public class Client {
 //        log.info("insert data with into {} status : {}", tableName, result.getStatus());
 //        return result.getStatus();
 //    }
-    private Result lock(String transactionId, String tableName, String key, String value, String type) {
+    private Result lock(String transactionId, String tableName, String key, String value, String type) throws Exception {
         Data lockData = Data.newBuilder()
                 .setTransactionId(transactionId)
                 .setType(type)
@@ -984,10 +919,12 @@ public class Client {
             locks.put(transactionId, new HashSet<>());
             locks.get(transactionId).add(lockData.getKey());
         }
+        if (!lockResult.getStatus())
+            throw new Exception(lockResult.getMessage());
         return lockResult;
     }
 
-    private Result lock(String transactionId, String tableName, String key, String value) {
+    private Result lock(String transactionId, String tableName, String key, String value) throws Exception {
         return lock(transactionId, tableName, key, value, WRITE_TYPE);
     }
 
@@ -1001,7 +938,7 @@ public class Client {
         log.info("lock on {} for insert status: {}", tableName, lockResult.getStatus());
         return lockResult;
     }
-    private Result insertLock(String transactionId, String tableName, String recordId) {
+    private Result insertLock(String transactionId, String tableName, String recordId) throws Exception {
         Data lockData = Data.newBuilder()
                 .setTransactionId(transactionId)
                 .setType(INSERT_TYPE)
@@ -1010,6 +947,8 @@ public class Client {
                 .build();
         Result lockResult = blockingStub.lock(lockData);
         log.info("lock on {} for insert status: {}", tableName, lockResult.getStatus());
+        if (!lockResult.getStatus())
+            throw new Exception(lockResult.getMessage());
         return lockResult;
     }
 
