@@ -64,6 +64,8 @@ public class Client {
                 new String[]{"1","2","3"},
                 new String[]{"1","1","1"},
                 new int[]{1,2,3});
+
+        
     }
 
     private void test() {
@@ -366,8 +368,10 @@ public class Client {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String tx = initResult.getMessage();
-            if (mode.equals("bamboo") || mode.equals("ww")) {
+            if (mode.equals("bamboo")) {
                 if (readItemBamboo(items, tx)) return false;
+            } else if (mode.equals("ww")) {
+               return !readItems(items, tx);
             }
             else {
                 if (readItemSLW(items, tx)) return false;
