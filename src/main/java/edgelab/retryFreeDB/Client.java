@@ -60,12 +60,12 @@ public class Client {
 
 
 
-        client.TPCC_newOrder("1", "2", "3", 3, "1",
-                new String[]{"1","2","3"},
-                new String[]{"1","1","1"},
+        client.TPCC_newOrder("1", "2", "3", "3", "1",
+                new int[]{1,2,3},
+                new int[]{1,1,1},
                 new int[]{1,2,3});
 
-        
+
     }
 
     private void test() {
@@ -157,7 +157,7 @@ public class Client {
 //        commit(tx1);
 
     }
-    public boolean TPCC_newOrder(String warehouseId, String districtId, String customerId, Integer orderLineCount, String allLocals, String[] itemIDs,  String[] supplierWarehouseIDs, int[] orderQuantities) {
+    public boolean TPCC_newOrder(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs,  int[] supplierWarehouseIDs, int[] orderQuantities) {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
 
@@ -206,14 +206,14 @@ public class Client {
                 insertLock(tx, "new_order", newOrderId);
                 insert(tx, "new_order", "", newOrderId);
 
-                for (int ol_number = 1; ol_number <= orderLineCount; ol_number++) {
-                    String ol_supply_w_id = supplierWarehouseIDs[ol_number - 1];
-                    String ol_i_id = itemIDs[ol_number - 1];
+                for (int ol_number = 1; ol_number <= Integer.parseInt(orderLineCount); ol_number++) {
+                    String ol_supply_w_id = String.valueOf(supplierWarehouseIDs[ol_number - 1]);
+                    String ol_i_id = String.valueOf(itemIDs[ol_number - 1]);
                     int ol_quantity = orderQuantities[ol_number - 1];
 
 //                    Get Item Price
                     lock(tx, "item", "i_id", String.valueOf(ol_i_id), READ_TYPE);
-                    Map<String, String> item = read(tx, "item", "i_id", String.valueOf(ol_i_id));
+                    Map<String, String> item = read(tx, "item", "i_id", ol_i_id);
 
                     float ol_amount = ol_quantity * Float.parseFloat(item.get("i_price"));
 //                    Get Stock

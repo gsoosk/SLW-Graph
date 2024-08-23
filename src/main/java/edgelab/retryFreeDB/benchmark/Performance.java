@@ -4,6 +4,9 @@ package edgelab.retryFreeDB.benchmark;
 
 import edgelab.proto.RetryFreeDBServerGrpc;
 import edgelab.retryFreeDB.Client;
+import edgelab.retryFreeDB.benchmark.util.RandomGenerator;
+import edgelab.retryFreeDB.benchmark.util.TPCCConfig;
+import edgelab.retryFreeDB.benchmark.util.TPCCUtil;
 import io.grpc.ConnectivityState;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -13,6 +16,7 @@ import io.prometheus.client.Summary;
 import io.prometheus.client.exporter.HTTPServer;
 import io.prometheus.client.hotspot.DefaultExports;
 import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
@@ -103,6 +107,10 @@ public class Performance {
         @Getter
         private boolean userAbort;
 
+        @Getter
+        @Setter
+        Map<String, int[]> arrayValues = new HashMap<>();
+
         public TPCCServerRequest(Type type, long batchId, Map<String, String> values, Long start, boolean userAbort) {
             super(batchId, values, start);
             this.type = type;
@@ -186,9 +194,10 @@ public class Performance {
     private int HOT_RECORD_SELECTION_CHANCE = 80;
     private int NUM_OF_PLAYERS = 500000;
     private int NUM_OF_LILSTINGS = 100000;
+    private int NUM_OF_WAREHOUSES = 1;
     private int buy_or_sell = 1;
     private int buy_or_sell_hot = 1;
-    private final Random random = new Random(1234);
+    private final RandomGenerator random = new RandomGenerator(1234);
     private static Map<String, Set<String>> readHotPlayerRecords(String filePath) {
         Map<String, Set<String>> map = new ConcurrentHashMap<>();
         try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
@@ -303,6 +312,7 @@ public class Performance {
         removeAlreadyListedRecords();
 
         this.HOT_RECORD_SELECTION_CHANCE = res.getInt("hotSelectionProb");
+        this.NUM_OF_WAREHOUSES = res.getInt("numOfWarehouses");
 
         if (res.getInt("maxThreads") != null)
             this.MAX_THREADS = res.getInt("maxThreads");
@@ -450,9 +460,107 @@ public class Performance {
             return getStoreServerRequest();
         }
         else if (benchmarkMode.equals("tpcc")) {
-            return null;
+            return getTPCCServerRequest();
         }
         throw new RuntimeException("Benchmark mode is not defined: " + benchmarkMode);
+    }
+
+    private TPCCServerRequest getTPCCServerRequest() {
+        int chance = random.nextInt(100); // Generates a random number between 0 (inclusive) and 100 (exclusive)
+        if (chance < 0) {
+
+            Map<String, String> tx = geTPCCPaymentRandomArguments();
+            long sendStartMs = System.currentTimeMillis();
+            return new TPCCServerRequest(TPCCServerRequest.Type.PAYMENT, txId++, tx, sendStartMs, false);
+        }
+        else {
+            return getTPCCNewOrderRequest();
+        }
+    }
+
+    private TPCCServerRequest getTPCCNewOrderRequest() {
+        int warehouseId = TPCCUtil.randomNumber(1, NUM_OF_WAREHOUSES, random);
+        int districtID = TPCCUtil.randomNumber(1, 10,  random);
+        int customerID = TPCCUtil.getCustomerID( random);
+
+        int numItems = TPCCUtil.randomNumber(5, 15,  random);
+        int[] itemIDs = new int[numItems];
+        int[] supplierWarehouseIDs = new int[numItems];
+        int[] orderQuantities = new int[numItems];
+        int allLocal = 1;
+
+        for (int i = 0; i < numItems; i++) {
+            itemIDs[i] = TPCCUtil.getItemID( random);
+            if (TPCCUtil.randomNumber(1, 100,  random) > 1) {
+                supplierWarehouseIDs[i] = warehouseId;
+            } else {
+                do {
+                    supplierWarehouseIDs[i] = TPCCUtil.randomNumber(1, NUM_OF_WAREHOUSES,  random);
+                } while (supplierWarehouseIDs[i] == warehouseId && NUM_OF_WAREHOUSES > 1);
+                allLocal = 0;
+            }
+            orderQuantities[i] = TPCCUtil.randomNumber(1, 10,  random);
+        }
+        boolean userAbort = false;
+
+        // we need to cause 1% of the new orders to be rolled back.
+        if (TPCCUtil.randomNumber(1, 100,  random) == 1) {
+            itemIDs[numItems - 1] = TPCCConfig.INVALID_ITEM_ID;
+            userAbort = true;
+        }
+
+        Map<String, String> values = Map.of(
+                "warehouseId", String.valueOf(warehouseId),
+                "districtId", String.valueOf(districtID),
+                "customerId", String.valueOf(customerID),
+                "oderLineCount", String.valueOf(numItems),
+                "allLocals", String.valueOf(allLocal)
+        );
+
+        Map<String, int[]> arrayValues = Map.of(
+                "itemIds", itemIDs,
+                "supplierWarehouseIds", supplierWarehouseIDs,
+                "orderQuantities", orderQuantities
+        );
+
+
+        long sendStartMs = System.currentTimeMillis();
+        TPCCServerRequest request = new TPCCServerRequest(TPCCServerRequest.Type.NEW_ORDER, txId++, values, sendStartMs, true);
+        request.setArrayValues(arrayValues);
+        return request;
+    }
+
+    private Map<String, String> geTPCCPaymentRandomArguments() {
+        int districtId = TPCCUtil.randomNumber(1, 10, random);
+        int warehouseId = TPCCUtil.randomNumber(1, NUM_OF_WAREHOUSES, random);
+        float paymentAmount = (float) (TPCCUtil.randomNumber(100, 500000, random) / 100.0);
+
+        int x = TPCCUtil.randomNumber(1, 100, random);
+        int customerDistrictId;
+        if (x <= 85) {
+            customerDistrictId = districtId;
+        } else {
+            customerDistrictId = TPCCUtil.randomNumber(1, 10, random);
+        }
+        int customerWarehouseID;
+        if (x <= 85) {
+            customerWarehouseID = warehouseId;
+        } else {
+            do {
+                customerWarehouseID = TPCCUtil.randomNumber(1, NUM_OF_WAREHOUSES, random);
+            } while (customerWarehouseID == warehouseId && NUM_OF_WAREHOUSES > 1);
+        }
+        int customerId = TPCCUtil.getCustomerID(random);
+
+        Map<String, String> values = Map.of(
+                "districtId", String.valueOf(districtId),
+                "warehouseId", String.valueOf(warehouseId),
+                "paymentAmount", String.valueOf(paymentAmount),
+                "customerDistrictId", String.valueOf(customerDistrictId),
+                "customerWarehouseId", String.valueOf(customerWarehouseID),
+                "customerId", String.valueOf(customerId)
+        );
+        return values;
     }
 
     private StoreServerRequest getStoreServerRequest() {
@@ -542,8 +650,54 @@ public class Performance {
     private void submitRequest(ServerRequest request, Stats stats) {
         if (request instanceof StoreServerRequest)
             submitRequest((StoreServerRequest) request, stats);
-//        else if (request instanceof TPCCServerRequest)
-//            submitRequest((TPCCServerRequest) request, stats);
+        else if (request instanceof TPCCServerRequest)
+            submitRequest((TPCCServerRequest) request, stats);
+    }
+
+    private void submitRequest(TPCCServerRequest request, Stats stats) {
+        Future<Void> future = executor.submit(()->{
+            boolean success = true;
+            if (request.getType() == TPCCServerRequest.Type.PAYMENT) {
+                Map<String, String> tx = request.getValues();
+                success = client.TPCC_payment(tx.get("warehouseId"),
+                        tx.get("districtId"),
+                        Float.parseFloat(tx.get("paymentAmount")),
+                        tx.get("customerWarehouseId"),
+                        tx.get("customerDistrictId"),
+                        tx.get("customerId"));
+                if (!success) {
+                    log.error("Unsuccessful TPCC Payment {}", tx);
+                    submitRetry(request, stats);
+                }
+            }
+            else if (request.getType() == TPCCServerRequest.Type.NEW_ORDER) {
+               success = client.TPCC_newOrder(request.getValues().get("warehouseId"),
+                       request.getValues().get("districtId"),
+                       request.getValues().get("customerId"),
+                       request.getValues().get("orderLineCount"),
+                       request.getValues().get("allLocals"),
+                       request.getArrayValues().get("itemIds"),
+                       request.getArrayValues().get("supplierWarehouseIds"),
+                       request.getArrayValues().get("orderQuantities"));
+
+                if (!success) {
+                    if (!request.isUserAbort()) {
+                        log.error("Unsuccessful TPCC new order {},{}", request.getValues(), request.getArrayValues());
+                        submitRetry(request, stats);
+                    }
+                    else {
+                        log.error("User Abort TPCC new order {},{}", request.getValues(), request.getArrayValues());
+                    }
+                }
+            }
+
+            if (success) {
+                stats.nextCompletion(request.start, 1);
+                log.info("request successful {}:{}", request.getType(),request.getValues());
+            }
+            return null;
+        });
+
     }
 
     private void submitRequest(StoreServerRequest request, Stats stats) {
@@ -988,6 +1142,15 @@ public class Performance {
                 .dest("benchmarkMode")
                 .metavar("BENCHMARK_MODE")
                 .help("type of the benchmark used. could be either \"store\" or \"tpcc\".");
+
+        parser.addArgument("--num-of-warehouses")
+                .action(store())
+                .required(false)
+                .setDefault(1)
+                .type(Integer.class)
+                .dest("numOfWarehouses")
+                .metavar("WAREHOUSECOUNT")
+                .help("number of warehouses in tpcc benchmark.");
 
         return parser;
     }
