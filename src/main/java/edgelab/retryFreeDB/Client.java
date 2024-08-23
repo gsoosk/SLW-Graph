@@ -56,7 +56,14 @@ public class Client {
 //        client.addListing("7", "7", 280);
 //        client.readItem(List.of("10", "11", "12"));
 
-        client.TPCC_payment("1", "2", 10.0f, "1", "2", "1");
+//        client.TPCC_payment("1", "2", 10.0f, "1", "2", "1");
+
+
+
+        client.TPCC_newOrder("1", "2", "3", 3, "1",
+                new String[]{"1","2","3"},
+                new String[]{"1","1","1"},
+                new int[]{1,2,3});
     }
 
     private void test() {
@@ -148,7 +155,7 @@ public class Client {
 //        commit(tx1);
 
     }
-    public boolean TPCC_newOrder(String warehouseId, String districtId, String customerId, Integer orderLineCount, String allLocals, int[] itemIDs,  int[] supplierWarehouseIDs, int[] orderQuantities) {
+    public boolean TPCC_newOrder(String warehouseId, String districtId, String customerId, Integer orderLineCount, String allLocals, String[] itemIDs,  String[] supplierWarehouseIDs, int[] orderQuantities) {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
 
@@ -189,7 +196,7 @@ public class Client {
                         "null" + "," +
                         orderLineCount + "," +
                         allLocals + "," +
-                        "'" + new Timestamp(System.currentTimeMillis()) + "',"
+                        "'" + new Timestamp(System.currentTimeMillis()) + "'"
                         ,openOrderId);
 
 //              Insert NewOrder
@@ -197,9 +204,9 @@ public class Client {
                 insertLock(tx, "new_order", newOrderId);
                 insert(tx, "new_order", "", newOrderId);
 
-                for (int ol_number = 0; ol_number < orderLineCount; ol_number++) {
-                    int ol_supply_w_id = supplierWarehouseIDs[ol_number - 1];
-                    int ol_i_id = itemIDs[ol_number - 1];
+                for (int ol_number = 1; ol_number <= orderLineCount; ol_number++) {
+                    String ol_supply_w_id = supplierWarehouseIDs[ol_number - 1];
+                    String ol_i_id = itemIDs[ol_number - 1];
                     int ol_quantity = orderQuantities[ol_number - 1];
 
 //                    Get Item Price
@@ -219,22 +226,22 @@ public class Client {
                         newStockQuantity = String.valueOf(Integer.parseInt(stock.get("s_quantity")) - ol_quantity + 91);
                     }
                     int stockRemoteCountIncrement = 0;
-                    if (ol_supply_w_id != Integer.parseInt(warehouseId)) {
+                    if (!ol_supply_w_id.equals(warehouseId)) {
                         stockRemoteCountIncrement += 1;
                     }
 
 
 //                    Insert OrderLine
-                    String orderLineId = warehouseId + "," + districtId + "," + district.get("d_next_o_id") + ol_number;
+                    String orderLineId = warehouseId + "," + districtId + "," + district.get("d_next_o_id") + "," + ol_number;
                     insertLock(tx, "order_line", orderLineId);
-                    insert(tx, "order_line", ol_i_id + "," + "null" + "," + ol_amount +
-                            "," + ol_supply_w_id + "," + ol_quantity + "," + ol_dist_info, orderLineId);
+                    insert(tx, "order_line", ol_i_id + "," + "'" + new Timestamp(System.currentTimeMillis()) + "'"
+                            + "," + ol_amount + "," + ol_supply_w_id + "," + ol_quantity + "," + ol_dist_info, orderLineId);
 
 //                    Update Stock
                     lock(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, WRITE_TYPE);
 
                     write(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, "s_quantity", newStockQuantity);
-                    write(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, "s_ytd", String.valueOf(Integer.parseInt(stock.get("s_ytd")) + ol_quantity));
+                    write(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, "s_ytd", String.valueOf(Float.parseFloat(stock.get("s_ytd")) + ol_quantity));
                     write(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, "s_order_cnt", String.valueOf(Integer.parseInt(stock.get("s_order_cnt")) + 1));
                     write(tx,"stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, "s_remote_cnt", String.valueOf(Integer.parseInt(stock.get("s_remote_cnt")) + stockRemoteCountIncrement));
                 }

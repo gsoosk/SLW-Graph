@@ -707,7 +707,8 @@ public class Postgres implements Storage{
 
 
     public void insert(Connection conn, DBInsertData data) throws SQLException {
-        String SQL = "INSERT INTO " + data.getTable() + " VALUES  (" + data.getRecordId() + "," + data.getNewRecord() + ")";
+        String SQL = data.getNewRecord().isEmpty() ? "INSERT INTO " + data.getTable() + " VALUES  (" + data.getRecordId() + ")"
+                : "INSERT INTO " + data.getTable() + " VALUES  (" + data.getRecordId() + "," + data.getNewRecord() + ")";
         log.info("insert {}:{}", data.getTable(), data.getRecordId());
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
