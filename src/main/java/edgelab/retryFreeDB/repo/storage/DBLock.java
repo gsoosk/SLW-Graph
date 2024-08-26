@@ -57,12 +57,15 @@ class DBLock {
 
 
         if (lockType == LockType.WRITE) {
-//            either no lock held or the same tx has a read lock
+//            either no lock held or the same tx has a read lock (upgrade r->w)
             if (holdingTransactions.isEmpty() || (holdingTransactions.size() == 1 && holdingTransactions.contains(transaction)))
                     if (pendingTransactions.contains(transaction) && pendingTransactions.peek().equals(transaction))
                         return true;
         }
         else {
+            // Can grant read lock if the same transaction has a write lock on it (upgrade w->r)
+            if (ownersLockType == LockType.WRITE && (!holdingTransactions.isEmpty() && holdingTransactions.contains(transaction)))
+                return true;
             // Can grant read lock if no write lock is held
             if (ownersLockType == LockType.WRITE)
                 return false;
