@@ -19,7 +19,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "30"
+          cpus: "40"
           memory: 60G
 
 
@@ -49,7 +49,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "30"
+          cpus: "10"
           memory: 60G
     restart: unless-stopped
     depends_on:
@@ -72,8 +72,10 @@ services:
                "--hot-selection-prob", "${PROB:-100}",
                "--read-item-number", "${ITEM:-1}",
                "--max-threads", "60",
-      #  "--max-items-threads", "60",
+               "--max-items-threads", "30",
                "--max-retry", "10",
+               "--benchmark-mode", "tpcc",
+               "--num-of-warehouses", "8",
                "--operation-delay", "${DELAY:-10}"]
     networks:
       app_net:
@@ -81,7 +83,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "30"
+          cpus: "10"
           memory: 60G
     depends_on:
       - java-server
