@@ -61,11 +61,6 @@ public class Postgres implements Storage{
 
     private String partitionId;
 
-    private final ConcurrentHashMap<String, Lock> resourceLocks = new ConcurrentHashMap<>();
-    private Lock getLock(String resource) {
-        return resourceLocks.computeIfAbsent(resource, k -> new ReentrantLock());
-    }
-
 
     public Postgres(String addr, String port) {
         url = "jdbc:postgresql://" + addr + ":" + port + "/postgres";

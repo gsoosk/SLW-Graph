@@ -513,7 +513,7 @@ public class Performance {
                 "warehouseId", String.valueOf(warehouseId),
                 "districtId", String.valueOf(districtID),
                 "customerId", String.valueOf(customerID),
-                "oderLineCount", String.valueOf(numItems),
+                "orderLineCount", String.valueOf(numItems),
                 "allLocals", String.valueOf(allLocal)
         );
 
@@ -525,7 +525,7 @@ public class Performance {
 
 
         long sendStartMs = System.currentTimeMillis();
-        TPCCServerRequest request = new TPCCServerRequest(TPCCServerRequest.Type.NEW_ORDER, txId++, values, sendStartMs, true);
+        TPCCServerRequest request = new TPCCServerRequest(TPCCServerRequest.Type.NEW_ORDER, txId++, values, sendStartMs, userAbort);
         request.setArrayValues(arrayValues);
         return request;
     }
