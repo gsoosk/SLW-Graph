@@ -17,7 +17,6 @@ import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.io.filefilter.FalseFileFilter;
 
 import java.io.IOException;
 import java.sql.Connection;
@@ -188,7 +187,7 @@ public class RetryFreeDBServer {
                     responseObserver.onCompleted();
                     return;
                 }
-                updateDBDataOnRepo(responseObserver, d, tx.getConnection());
+                updateDBDataOnRepo(responseObserver, d, tx);
             }
             else {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not deserialize data").build());
@@ -206,7 +205,7 @@ public class RetryFreeDBServer {
 
             if (d != null) {
                 log.info("{}: update on {}", tx, request.getKey());
-                updateDBDataOnRepo(responseObserver, d, tx.getConnection());
+                updateDBDataOnRepo(responseObserver, d, tx);
             }
             else {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not deserialize data").build());
@@ -214,17 +213,17 @@ public class RetryFreeDBServer {
             }
         }
 
-        private void updateDBDataOnRepo(StreamObserver<Result> responseObserver, DBData d, Connection conn) {
+        private void updateDBDataOnRepo(StreamObserver<Result> responseObserver, DBData d, DBTransaction tx) {
             try {
                 String result = "done";
                 if (d instanceof DBDeleteData)
-                    repo.remove(conn, (DBDeleteData) d);
+                    repo.remove(tx.getConnection(), (DBDeleteData) d);
                 else if (d instanceof DBWriteData)
-                    repo.update(conn, (DBWriteData) d);
+                    repo.update(tx.getConnection(), (DBWriteData) d);
                 else if(d instanceof DBInsertData)
-                    repo.insert(conn, (DBInsertData) d);
+                    repo.insert(tx.getConnection(), (DBInsertData) d);
                 else
-                    result = repo.get(conn, d);
+                    result = repo.get(tx, d);
                 responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(result).build());
                 responseObserver.onCompleted();
             }

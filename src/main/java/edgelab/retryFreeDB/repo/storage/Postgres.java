@@ -5,6 +5,7 @@ import edgelab.retryFreeDB.repo.storage.DTO.DBData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBDeleteData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBInsertData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBWriteData;
+import edgelab.retryFreeDB.repo.storage.util.BiKeyHashMap;
 import lombok.extern.slf4j.Slf4j;
 import org.postgresql.PGConnection;
 
@@ -21,8 +22,6 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
 public class Postgres implements Storage{
@@ -61,6 +60,7 @@ public class Postgres implements Storage{
 
     private String partitionId;
 
+    private final BiKeyHashMap<String, String, String> dirtyReads = new BiKeyHashMap<>(); // <tx, resource, value>
 
     public Postgres(String addr, String port) {
         url = "jdbc:postgresql://" + addr + ":" + port + "/postgres";
@@ -437,6 +437,13 @@ public class Postgres implements Storage{
 
     public void unlock(DBTransaction tx, DBData data, Set<DBTransaction> toBeAborted) throws SQLException {
         String resource = getResource(data);
+
+        String dirtyRead = read(tx.getConnection(), data).toString();
+        synchronized (dirtyReads) {
+            log.info("{}: adding dirty read for {}", tx, resource);
+            dirtyReads.put(tx.toString(), resource, dirtyRead);
+        }
+
         releaseLock(tx, resource, toBeAborted);
     }
 
@@ -520,7 +527,14 @@ public class Postgres implements Storage{
                 releaseLock(tx, resource, toBeAborted);
             }
             tx.clearResources();
+
+            synchronized (dirtyReads) {
+                log.info("{}: removing dirty reads for tx", tx);
+                dirtyReads.removeByTransaction(tx.toString());
+            }
         }
+
+
     }
 
     public void retireLock(DBTransaction tx, DBData data) throws Exception {
@@ -547,6 +561,12 @@ public class Postgres implements Storage{
 
                 lock.promoteWaiters();
                 lock.notifyAll(); // Notify all waiting threads
+            }
+
+            String dirtyRead = read(tx.getConnection(), data).toString();
+            synchronized (dirtyReads) {
+                log.info("{}: adding dirty read for {}", tx, resource);
+                dirtyReads.put(tx.toString(), resource, dirtyRead);
             }
         }
         else {
@@ -663,10 +683,26 @@ public class Postgres implements Storage{
     }
 
 
-    public String get(Connection conn, DBData data) throws SQLException {
+    public String get(DBTransaction tx, DBData data) throws SQLException {
+        String resource = getResource(data);
+
+        synchronized (dirtyReads) {
+            if (dirtyReads.containsResource(resource)) {
+                log.info("{}: dirty read of {}", tx, resource);
+                delay(OPERATION_THINKING_TIME);
+                return dirtyReads.getByResource(resource);
+            }
+        }
+
+        StringBuilder value = read(tx.getConnection(), data);
+        delay(OPERATION_THINKING_TIME);
+        return value.toString();
+    }
+
+    private static StringBuilder read(Connection conn, DBData data) throws SQLException {
         StringBuilder value = new StringBuilder();
         String SQL = "SELECT * FROM "+ data.getTable() +" WHERE ";
-        for (int i = 0 ; i < data.getIds().size(); i++) {
+        for (int i = 0; i < data.getIds().size(); i++) {
             if (i != 0)
                 SQL += "AND ";
             SQL += data.getIds().get(i) + " = ? ";
@@ -691,13 +727,11 @@ public class Postgres implements Storage{
                         value.append(",");
                 }
             }
-            delay(OPERATION_THINKING_TIME);
         } catch (SQLException ex) {
             log.error("could not read: {}", ex.getMessage());
             throw ex;
         }
-
-        return value.toString();
+        return value;
     }
 
 
@@ -750,6 +784,9 @@ public class Postgres implements Storage{
     }
 
 
+    public void partialCommit(DBTransaction tx) throws SQLException {
+        tx.getConnection().commit();
+    }
 }
 
 

@@ -169,13 +169,20 @@ public class Client {
 
     }
     public boolean TPCC_newOrder(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs,  int[] supplierWarehouseIDs, int[] orderQuantities) {
-        if (mode.equals("ww"))
-            return TPCC_newOrderWW(warehouseId, districtId, customerId, orderLineCount, allLocals, itemIDs, supplierWarehouseIDs, orderQuantities);
-        else if (mode.equals("slw"))
-            return TPCC_newOrderSLW(warehouseId, districtId, customerId, orderLineCount, allLocals, itemIDs, supplierWarehouseIDs, orderQuantities);
-        else {
-            log.error("Does not support this mode: {}", mode);
-            return false;
+        switch (mode) {
+            case "ww" -> {
+                return TPCC_newOrderWW(warehouseId, districtId, customerId, orderLineCount, allLocals, itemIDs, supplierWarehouseIDs, orderQuantities);
+            }
+            case "slw" -> {
+                return TPCC_newOrderSLW(warehouseId, districtId, customerId, orderLineCount, allLocals, itemIDs, supplierWarehouseIDs, orderQuantities);
+            }
+            case "bamboo" -> {
+                return TPCC_newOrderBamboo(warehouseId, districtId, customerId, orderLineCount, allLocals, itemIDs, supplierWarehouseIDs, orderQuantities);
+            }
+            default -> {
+                log.error("Does not support this mode: {}", mode);
+                return false;
+            }
         }
     }
     public boolean TPCC_newOrderWW(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs,  int[] supplierWarehouseIDs, int[] orderQuantities) {
@@ -281,7 +288,112 @@ public class Client {
 
         return false;
     }
+    public boolean TPCC_newOrderBamboo(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs,  int[] supplierWarehouseIDs, int[] orderQuantities) {
+        Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
+        if (initResult.getStatus()) {
 
+            String tx = initResult.getMessage();
+            try {
+//              Get customer
+                String customerIdKey = "c_w_id,c_d_id,c_id";
+                String customerIdValue = warehouseId + "," + districtId + "," + customerId;
+                lock(tx, "customer", customerIdKey, customerIdValue, READ_TYPE);
+                Map<String, String> customer = read(tx, "customer", customerIdKey, customerIdValue);
+                if (customer.isEmpty())
+                    throw new Exception("customer does not exists");
+
+
+//              Get warehouse
+                lock(tx, "warehouse", "w_id", warehouseId, READ_TYPE);
+                Map<String, String> warehouse = read(tx, "warehouse", "w_id", warehouseId);
+                if (warehouse.isEmpty())
+                    throw new Exception("warehouse does not exists");
+
+
+
+//              Get district
+                lock(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, READ_TYPE);
+                Map<String, String> district = read(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId);
+                if (district.isEmpty())
+                    throw new Exception("district does not exists");
+
+//              Update district
+                lock(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, WRITE_TYPE);
+                String d_next_o_id = String.valueOf(Integer.parseInt(district.get("d_next_o_id")) + 1);
+                write(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, "d_next_o_id", d_next_o_id);
+
+                retireLock(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId);
+
+//              Insert OpenOrder
+                String openOrderId = warehouseId + "," + districtId + "," + district.get("d_next_o_id");
+                insertLock(tx, "oorder", openOrderId);
+                insert(tx, "oorder", customerId + "," +
+                                "null" + "," +
+                                orderLineCount + "," +
+                                allLocals + "," +
+                                "'" + new Timestamp(System.currentTimeMillis()) + "'"
+                        ,openOrderId);
+
+//              Insert NewOrder
+                String newOrderId = warehouseId + "," + districtId + "," + district.get("d_next_o_id");
+                insertLock(tx, "new_order", newOrderId);
+                insert(tx, "new_order", "", newOrderId);
+
+                for (int ol_number = 1; ol_number <= Integer.parseInt(orderLineCount); ol_number++) {
+                    String ol_supply_w_id = String.valueOf(supplierWarehouseIDs[ol_number - 1]);
+                    String ol_i_id = String.valueOf(itemIDs[ol_number - 1]);
+                    int ol_quantity = orderQuantities[ol_number - 1];
+
+//                    Get Item Price
+                    lock(tx, "item", "i_id", String.valueOf(ol_i_id), READ_TYPE);
+                    Map<String, String> item = read(tx, "item", "i_id", ol_i_id);
+
+                    float ol_amount = ol_quantity * Float.parseFloat(item.get("i_price"));
+//                    Get Stock
+                    lock(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, READ_TYPE);
+                    Map<String, String> stock = read(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id);
+
+                    String ol_dist_info = stock.get(getDistInfoKey(districtId));
+                    String newStockQuantity;
+                    if (Integer.parseInt(stock.get("s_quantity")) - ol_quantity >= 10) {
+                        newStockQuantity = String.valueOf(Integer.parseInt(stock.get("s_quantity")) - ol_quantity);
+                    } else {
+                        newStockQuantity = String.valueOf(Integer.parseInt(stock.get("s_quantity")) - ol_quantity + 91);
+                    }
+                    int stockRemoteCountIncrement = 0;
+                    if (!ol_supply_w_id.equals(warehouseId)) {
+                        stockRemoteCountIncrement += 1;
+                    }
+
+
+//                    Insert OrderLine
+                    String orderLineId = warehouseId + "," + districtId + "," + district.get("d_next_o_id") + "," + ol_number;
+                    insertLock(tx, "order_line", orderLineId);
+                    insert(tx, "order_line", ol_i_id + "," + "'" + new Timestamp(System.currentTimeMillis()) + "'"
+                            + "," + ol_amount + "," + ol_supply_w_id + "," + ol_quantity + "," + ol_dist_info, orderLineId);
+
+//                    Update Stock
+                    lock(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, WRITE_TYPE);
+
+                    write(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, "s_quantity", newStockQuantity);
+                    write(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, "s_ytd", String.valueOf(Float.parseFloat(stock.get("s_ytd")) + ol_quantity));
+                    write(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, "s_order_cnt", String.valueOf(Integer.parseInt(stock.get("s_order_cnt")) + 1));
+                    write(tx,"stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, "s_remote_cnt", String.valueOf(Integer.parseInt(stock.get("s_remote_cnt")) + stockRemoteCountIncrement));
+                }
+
+                waitForCommit(tx);
+                commit(tx);
+                return true;
+
+            } catch (Exception e) {
+                log.error(e.getMessage());
+                rollback(tx);
+                return false;
+            }
+        }
+
+        return false;
+    }
     public boolean TPCC_newOrderSLW(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs,  int[] supplierWarehouseIDs, int[] orderQuantities) {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
@@ -315,6 +427,28 @@ public class Client {
                 String d_next_o_id = String.valueOf(Integer.parseInt(district.get("d_next_o_id")) + 1);
                 write(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, "d_next_o_id", d_next_o_id);
 
+
+//              Prepare Stocks locks
+                Pair[] pairs = new Pair[Integer.parseInt(orderLineCount)];
+                for (int i = 0; i < Integer.parseInt(orderLineCount); i++) {
+                    pairs[i] = new Pair(supplierWarehouseIDs[i], itemIDs[i]);
+                }
+
+                Arrays.sort(pairs, Comparator.comparingInt((Pair pair) -> pair.key)
+                        .thenComparing(pair -> pair.value));
+
+                for (int ol_number = 1; ol_number <= Integer.parseInt(orderLineCount); ol_number++) {
+                    String ol_supply_w_id = String.valueOf(pairs[ol_number - 1].key);
+                    String ol_i_id = String.valueOf(pairs[ol_number - 1].value);
+                    lock(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, WRITE_TYPE);
+                }
+
+//                Early Release of Locks: Unlock customer, warehouse, district
+                unlock(tx, "warehouse", "w_id", warehouseId);
+                unlock(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId);
+                unlock(tx, "customer", customerIdKey, customerIdValue);
+
+
 //              Insert OpenOrder
                 String openOrderId = warehouseId + "," + districtId + "," + district.get("d_next_o_id");
                 insertLock(tx, "oorder", openOrderId);
@@ -331,15 +465,6 @@ public class Client {
                 insert(tx, "new_order", "", newOrderId);
 
 
-                Pair[] pairs = new Pair[Integer.parseInt(orderLineCount)];
-                for (int i = 0; i < Integer.parseInt(orderLineCount); i++) {
-                    pairs[i] = new Pair(supplierWarehouseIDs[i], itemIDs[i]);
-                }
-
-                Arrays.sort(pairs, Comparator.comparingInt((Pair pair) -> pair.key)
-                        .thenComparing(pair -> pair.value));
-
-
 
                 for (int ol_number = 1; ol_number <= Integer.parseInt(orderLineCount); ol_number++) {
                     String ol_supply_w_id = String.valueOf(pairs[ol_number - 1].key);
@@ -352,7 +477,6 @@ public class Client {
 
                     float ol_amount = ol_quantity * Float.parseFloat(item.get("i_price"));
 //                    Get Stock
-                    lock(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, WRITE_TYPE);
                     Map<String, String> stock = read(tx, "stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id);
 
                     String ol_dist_info = stock.get(getDistInfoKey(districtId));
@@ -413,13 +537,20 @@ public class Client {
 
 
     public boolean TPCC_payment(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
-        if (mode.equals("ww"))
-            return TPCC_paymentWW(warehouseId, districtId, paymentAmount, customerWarehouseId, customerDistrictId, customerId);
-        else if (mode.equals("slw"))
-            return TPCC_paymentSLW(warehouseId, districtId, paymentAmount, customerWarehouseId, customerDistrictId, customerId);
-        else {
-            log.error("Does not support this mode: {}", mode);
-            return false;
+        switch (mode) {
+            case "ww" -> {
+                return TPCC_paymentWW(warehouseId, districtId, paymentAmount, customerWarehouseId, customerDistrictId, customerId);
+            }
+            case "slw" -> {
+                return TPCC_paymentSLW(warehouseId, districtId, paymentAmount, customerWarehouseId, customerDistrictId, customerId);
+            }
+            case "bamboo" -> {
+                return TPCC_paymentBamboo(warehouseId, districtId, paymentAmount, customerWarehouseId, customerDistrictId, customerId);
+            }
+            default -> {
+                log.error("Does not support this mode: {}", mode);
+                return false;
+            }
         }
     }
     public boolean TPCC_paymentWW(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
@@ -483,6 +614,70 @@ public class Client {
         return false;
     }
 
+    public boolean TPCC_paymentBamboo(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
+        Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
+        if (initResult.getStatus()) {
+            String tx = initResult.getMessage();
+            try {
+
+
+//            Get warehouse
+                lock(tx, "warehouse", "w_id", warehouseId, READ_TYPE);
+                Map<String, String> warehouse = read(tx, "warehouse", "w_id", warehouseId);
+                if (warehouse.isEmpty()) {
+                    log.info("warehouse does not exists");
+                    commit(tx);
+                    return false;
+                }
+
+//            update warehouse
+                lock(tx, "warehouse", "w_id", warehouseId, WRITE_TYPE);
+                float newWarehouseBalance = Float.parseFloat(warehouse.get("w_ytd")) + paymentAmount;
+                write(tx, "warehouse", "w_id", warehouseId, "w_ytd", String.valueOf(newWarehouseBalance)) ;
+
+                retireLock(tx, "warehouse", "w_id", warehouseId);
+
+//          get district
+                lock(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, READ_TYPE);
+                Map<String, String> district = read(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId);
+                if (district.isEmpty())
+                    throw new Exception("district does not exists");
+                //            Update District
+                lock(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, WRITE_TYPE);
+                float newDistrictBalance = Float.parseFloat(district.get("d_ytd")) + paymentAmount;
+                write(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, "d_ytd", String.valueOf(newDistrictBalance)) ;
+
+                retireLock(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId);
+
+                //            Get customer
+                String customerIdKey = "c_w_id,c_d_id,c_id";
+                String customerIdValue = customerWarehouseId + "," + customerDistrictId + "," + customerId;
+                lock(tx, "customer", customerIdKey, customerIdValue, READ_TYPE);
+                Map<String, String> customer = read(tx, "customer", customerIdKey, customerIdValue);
+                if (customer.isEmpty())
+                    throw new Exception("customer does not exists");
+
+//            Update customer
+                lock(tx, "customer", customerIdKey, customerIdValue, WRITE_TYPE);
+                updateCustomer(warehouseId, districtId, paymentAmount, customerWarehouseId, customerDistrictId, customerId, customer, tx, customerIdKey, customerIdValue);
+
+                //            insert history
+                insertHistory(warehouseId, districtId, paymentAmount, customerWarehouseId, customerDistrictId, customerId, tx);
+
+                waitForCommit(tx);
+
+                commit(tx);
+                return true;
+            } catch (Exception e) {
+                log.error(e.getMessage());
+                rollback(tx);
+                return false;
+            }
+        }
+
+        return false;
+    }
+
     public boolean TPCC_paymentSLW(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
@@ -516,6 +711,11 @@ public class Client {
                 //            Update District
                 float newDistrictBalance = Float.parseFloat(district.get("d_ytd")) + paymentAmount;
                 write(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId, "d_ytd", String.valueOf(newDistrictBalance)) ;
+
+
+//                Early Release of Locks: Unlock warehouse and district
+                unlock(tx, "warehouse", "w_id", warehouseId);
+                unlock(tx, "district", "d_w_id,d_id", warehouseId + "," + districtId);
 
                 //            Get customer
                 Map<String, String> customer = read(tx, "customer", customerIdKey, customerIdValue);

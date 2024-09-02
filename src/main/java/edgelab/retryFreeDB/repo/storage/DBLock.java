@@ -98,7 +98,10 @@ class DBLock {
 //                        if (conflict(pendingLockTypes.get(t), ownersLockType))
 //                            break;
 //
+            boolean upgrade = false;
             if (canGrant(t, pendingLockTypes.get(t))) {
+                if (isGoingToBeUpgraded(t, pendingLockTypes.get(t)))
+                    upgrade = true;
                 log.info("promoting transaction {}", t.toString());
                 grant(t, pendingLockTypes.get(t));
             }
@@ -108,14 +111,24 @@ class DBLock {
 
             if (BAMBOO_ENABLE) {
                 for (DBTransaction tp : retiredTransactions) {
-                    if (conflict(retiredLockTypes.get(tp), lockType)) {
-                        log.info("commit semaphore increased for transaction {}", t);
-                        t.incCommitSemaphore();
-                        break;
-                    }
+                    if (!upgrade) // do not increase commit semaphore twice for an upgrade lock
+                        if (conflict(retiredLockTypes.get(tp), lockType)) {
+
+                            log.info("commit semaphore increased for transaction {}", t);
+                            t.incCommitSemaphore();
+                            break;
+                        }
                 }
             }
         }
+    }
+
+    private boolean isGoingToBeUpgraded(DBTransaction transaction, LockType lockType) {
+        if (lockType == LockType.WRITE)
+            return (holdingTransactions.size() == 1 && holdingTransactions.contains(transaction));
+        else
+            return (!holdingTransactions.isEmpty() && holdingTransactions.contains(transaction));
+
     }
 
     public synchronized boolean conflict(DBTransaction holdingTransaction, DBTransaction transaction, LockType lockType) {
