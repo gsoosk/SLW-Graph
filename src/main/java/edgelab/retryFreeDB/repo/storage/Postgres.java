@@ -278,6 +278,10 @@ public class Postgres implements Storage{
 
 
         synchronized (lock) {
+            if (tx.isAbort()) {
+                log.error("Transaction is aborted. Could not lock");
+                throw new Exception("Transaction aborted. can not lock");
+            }
 
             if (!lock.isHeldBefore(tx, lockType)) {
 
