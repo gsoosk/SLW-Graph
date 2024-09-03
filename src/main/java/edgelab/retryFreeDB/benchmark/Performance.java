@@ -191,10 +191,14 @@ public class Performance {
     private List<String> hotItems = new ArrayList<>();
     private Map<String, List<String>> hotListings; // Listing: <iid, price>
     private Set<String> alreadyBoughtListing = new HashSet<>();
-    private int HOT_RECORD_SELECTION_CHANCE = 80;
+    private int HOT_RECORD_SELECTION_CHANCE = 0;
     private int NUM_OF_PLAYERS = 500000;
     private int NUM_OF_LILSTINGS = 100000;
     private int NUM_OF_WAREHOUSES = 1;
+    private int NUM_OF_HOT_WAREHOUSE = 0;
+
+    private List<Integer> hotWarehouses = new ArrayList<>();
+    private List<Integer> notHotWarehouses = new ArrayList<>();
     private int buy_or_sell = 1;
     private int buy_or_sell_hot = 1;
     private final RandomGenerator random = new RandomGenerator(1234);
@@ -306,13 +310,23 @@ public class Performance {
                 .build();
 
 
-        hotPlayersAndItems = readHotPlayerRecords(res.getString("hotPlayers"));
-        populateHotItems();
-        hotListings = readHotListingRecords(res.getString("hotListings"));
-        removeAlreadyListedRecords();
+        String benchmarkMode = res.getString("benchmarkMode");
 
         this.HOT_RECORD_SELECTION_CHANCE = res.getInt("hotSelectionProb");
         this.NUM_OF_WAREHOUSES = res.getInt("numOfWarehouses");
+        this.NUM_OF_HOT_WAREHOUSE = res.getInt("hotWarehouses");
+
+
+        if (benchmarkMode.equals("store")) {
+            hotPlayersAndItems = readHotPlayerRecords(res.getString("hotPlayers"));
+            populateHotItems();
+            hotListings = readHotListingRecords(res.getString("hotListings"));
+            removeAlreadyListedRecords();
+        } else if (benchmarkMode.equals("tpcc")) {
+            populateHotWarehouses();
+        }
+
+
 
         if (res.getInt("maxThreads") != null)
             this.MAX_THREADS = res.getInt("maxThreads");
@@ -330,7 +344,7 @@ public class Performance {
         }
         serverConfig.put("mode", res.getString("2PLMode"));
 
-        String benchmarkMode = res.getString("benchmarkMode");
+
 
         long startMs = System.currentTimeMillis();
 
@@ -349,7 +363,7 @@ public class Performance {
 
 //            TODO: Refactor this function
         long startToWaitTime = System.currentTimeMillis();
-        Stats stats = new Stats(numRecords, 1000, resultFilePath, metricsFilePath, recordSize, 0, 0.0, 0, 20000, res.getString("hotPlayers"), HOT_RECORD_SELECTION_CHANCE, MAX_THREADS, res.getString("2PLMode"), operationDelay);
+        Stats stats = new Stats(numRecords, 1000, resultFilePath, metricsFilePath, recordSize, 0, 0.0, 0, 20000, benchmarkMode.equals("store") ? res.getString("hotPlayers") : String.valueOf(NUM_OF_HOT_WAREHOUSE), HOT_RECORD_SELECTION_CHANCE, MAX_THREADS, res.getString("2PLMode"), operationDelay);
 
         Integer numberOfItemsToRead = res.get("readItemNumber");
         Thread itemThread = null;
@@ -405,6 +419,20 @@ public class Performance {
         executor.shutdownNow();
 
 
+    }
+
+    private void populateHotWarehouses() {
+
+        List<Integer> allWarehouses = new ArrayList<>();
+        for (int i = 1; i <= NUM_OF_WAREHOUSES; i++) {
+            allWarehouses.add(i);
+        }
+
+        // Shuffle the list to randomize the order
+        Collections.shuffle(allWarehouses);
+
+        hotWarehouses = allWarehouses.subList(0, NUM_OF_HOT_WAREHOUSE);
+        notHotWarehouses = allWarehouses.subList(NUM_OF_HOT_WAREHOUSE, allWarehouses.size());
     }
 
     private Thread runItemThread(long sendingStart, Long benchmarkTime, Integer numberOfItemsToRead, Stats stats) {
@@ -466,20 +494,25 @@ public class Performance {
     }
 
     private TPCCServerRequest getTPCCServerRequest() {
-        int chance = random.nextInt(100); // Generates a random number between 0 (inclusive) and 100 (exclusive)
-        if (chance < 0) {
+        int txChance = random.nextInt(100); // Generates a random number between 0 (inclusive) and 100 (exclusive)
+        int hotnessChance = random.nextInt(100);
+        int warehouseId;
+        if (hotnessChance < HOT_RECORD_SELECTION_CHANCE)
+            warehouseId = hotWarehouses.get(random.nextInt(hotWarehouses.size()));
+        else
+            warehouseId = notHotWarehouses.get(random.nextInt(notHotWarehouses.size()));
 
-            Map<String, String> tx = geTPCCPaymentRandomArguments();
-            long sendStartMs = System.currentTimeMillis();
-            return new TPCCServerRequest(TPCCServerRequest.Type.PAYMENT, txId++, tx, sendStartMs, false);
+
+
+        if (txChance < 50) {
+            return geTPCCPaymentRandomRequest(warehouseId);
         }
         else {
-            return getTPCCNewOrderRequest();
+            return getTPCCNewOrderRequest(warehouseId);
         }
     }
 
-    private TPCCServerRequest getTPCCNewOrderRequest() {
-        int warehouseId = TPCCUtil.randomNumber(1, NUM_OF_WAREHOUSES, random);
+    private TPCCServerRequest getTPCCNewOrderRequest(int warehouseId) {
         int districtID = TPCCUtil.randomNumber(1, 10,  random);
         int customerID = TPCCUtil.getCustomerID( random);
 
@@ -505,7 +538,7 @@ public class Performance {
 
         // we need to cause 1% of the new orders to be rolled back.
         if (TPCCUtil.randomNumber(1, 100,  random) == 1) {
-            itemIDs[numItems - 1] = TPCCConfig.INVALID_ITEM_ID;
+            districtID = TPCCConfig.INVALID_DISTRICT_ID;
             userAbort = true;
         }
 
@@ -530,9 +563,8 @@ public class Performance {
         return request;
     }
 
-    private Map<String, String> geTPCCPaymentRandomArguments() {
+    private TPCCServerRequest geTPCCPaymentRandomRequest(int warehouseId) {
         int districtId = TPCCUtil.randomNumber(1, 10, random);
-        int warehouseId = TPCCUtil.randomNumber(1, NUM_OF_WAREHOUSES, random);
         float paymentAmount = (float) (TPCCUtil.randomNumber(100, 500000, random) / 100.0);
 
         int x = TPCCUtil.randomNumber(1, 100, random);
@@ -560,7 +592,9 @@ public class Performance {
                 "customerWarehouseId", String.valueOf(customerWarehouseID),
                 "customerId", String.valueOf(customerId)
         );
-        return values;
+
+        long sendStartMs = System.currentTimeMillis();
+        return new TPCCServerRequest(TPCCServerRequest.Type.PAYMENT, txId++, values, sendStartMs, false);
     }
 
     private StoreServerRequest getStoreServerRequest() {
@@ -1151,6 +1185,15 @@ public class Performance {
                 .dest("numOfWarehouses")
                 .metavar("WAREHOUSECOUNT")
                 .help("number of warehouses in tpcc benchmark.");
+
+        parser.addArgument("--hot-warehouses")
+                .action(store())
+                .required(false)
+                .setDefault(0)
+                .type(Integer.class)
+                .dest("hotWarehouses")
+                .metavar("HOTWAREHOUSE")
+                .help("number of hot warehouse records in tpcc benchmark.");
 
         return parser;
     }

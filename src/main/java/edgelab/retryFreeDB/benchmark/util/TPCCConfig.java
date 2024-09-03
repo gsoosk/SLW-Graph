@@ -36,4 +36,5 @@ public final class TPCCConfig {
 
   /** An invalid item id used to rollback a new order transaction. */
   public static final int INVALID_ITEM_ID = -12345;
+  public static final int INVALID_DISTRICT_ID = -12345;
 }
