@@ -299,12 +299,14 @@ public class Postgres implements Storage{
                 while (!lock.isHeldBefore(tx, lockType)) {
                     try {
                         log.info("{}: waiting for lock on {}", tx, resource);
+                        tx.startWaiting();
                         lock.wait();
                         if (tx.isAbort()) {
                             log.error("Transaction is aborted. Could not lock");
                             throw new Exception("Transaction aborted. can not lock");
                         }
                         log.info("{}: wakes up to check the lock {}", tx, resource);
+                        tx.wakesUp();
 
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();

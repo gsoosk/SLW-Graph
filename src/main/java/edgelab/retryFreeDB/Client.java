@@ -8,11 +8,12 @@ import edgelab.proto.TransactionId;
 import edgelab.proto.Result;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.sql.Timestamp;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -30,6 +31,23 @@ import static edgelab.retryFreeDB.RetryFreeDBConfiguration.WRITE_TYPE;
 
 @Slf4j
 public class Client {
+    public static class TransactionResult {
+        @Getter
+        @Setter
+        boolean success;
+        @Getter
+        @Setter
+        long waitingTime;
+        @Getter
+        long start;
+
+        public TransactionResult() {
+            this.success = false;
+            this.waitingTime = 0;
+            this.start = System.currentTimeMillis();
+        }
+
+    }
     private final RetryFreeDBServerGrpc.RetryFreeDBServerBlockingStub blockingStub;
     private final ManagedChannel channel;
     private Map<String, Set<String>> locks = new ConcurrentHashMap<>();
@@ -168,7 +186,7 @@ public class Client {
 //        commit(tx1);
 
     }
-    public boolean TPCC_newOrder(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs,  int[] supplierWarehouseIDs, int[] orderQuantities) {
+    public TransactionResult TPCC_newOrder(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs,  int[] supplierWarehouseIDs, int[] orderQuantities) {
         switch (mode) {
             case "ww" -> {
                 return TPCC_newOrderWW(warehouseId, districtId, customerId, orderLineCount, allLocals, itemIDs, supplierWarehouseIDs, orderQuantities);
@@ -181,11 +199,13 @@ public class Client {
             }
             default -> {
                 log.error("Does not support this mode: {}", mode);
-                return false;
+                return new TransactionResult();
             }
         }
     }
-    public boolean TPCC_newOrderWW(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs,  int[] supplierWarehouseIDs, int[] orderQuantities) {
+    public TransactionResult TPCC_newOrderWW(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs, int[] supplierWarehouseIDs, int[] orderQuantities) {
+        TransactionResult res = new TransactionResult();
+
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
 
@@ -276,19 +296,28 @@ public class Client {
                     write(tx,"stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, "s_remote_cnt", String.valueOf(Integer.parseInt(stock.get("s_remote_cnt")) + stockRemoteCountIncrement));
                 }
 
-                commit(tx);
-                return true;
+                return getCommitResult(tx, res);
 
             } catch (Exception e) {
                 log.error(e.getMessage());
                 rollback(tx);
-                return false;
+                return res;
             }
         }
 
-        return false;
+        return res;
     }
-    public boolean TPCC_newOrderBamboo(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs,  int[] supplierWarehouseIDs, int[] orderQuantities) {
+
+    private TransactionResult getCommitResult(String tx, TransactionResult res) {
+        Result commitResult = commit(tx);
+        res.setSuccess(true);
+        if (commitResult.getReturnsMap().containsKey("waiting_time"))
+            res.setWaitingTime(Long.parseLong(commitResult.getReturnsMap().get("waiting_time")));
+        return res;
+    }
+
+    public TransactionResult TPCC_newOrderBamboo(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs, int[] supplierWarehouseIDs, int[] orderQuantities) {
+        TransactionResult res = new TransactionResult();
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
 
@@ -382,19 +411,19 @@ public class Client {
                 }
 
                 waitForCommit(tx);
-                commit(tx);
-                return true;
+                return getCommitResult(tx, res);
 
             } catch (Exception e) {
                 log.error(e.getMessage());
                 rollback(tx);
-                return false;
+                return res;
             }
         }
 
-        return false;
+        return res;
     }
-    public boolean TPCC_newOrderSLW(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs,  int[] supplierWarehouseIDs, int[] orderQuantities) {
+    public TransactionResult TPCC_newOrderSLW(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs, int[] supplierWarehouseIDs, int[] orderQuantities) {
+        TransactionResult res = new TransactionResult();
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
 
@@ -506,17 +535,16 @@ public class Client {
                     write(tx,"stock", "s_w_id,s_i_id", ol_supply_w_id + "," + ol_i_id, "s_remote_cnt", String.valueOf(Integer.parseInt(stock.get("s_remote_cnt")) + stockRemoteCountIncrement));
                 }
 
-                commit(tx);
-                return true;
+                return getCommitResult(tx, res);
 
             } catch (Exception e) {
                 log.error(e.getMessage());
                 rollback(tx);
-                return false;
+                return res;
             }
         }
 
-        return false;
+        return res;
     }
 
     private String getDistInfoKey(String districtId) {
@@ -536,7 +564,7 @@ public class Client {
     }
 
 
-    public boolean TPCC_payment(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
+    public TransactionResult TPCC_payment(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
         switch (mode) {
             case "ww" -> {
                 return TPCC_paymentWW(warehouseId, districtId, paymentAmount, customerWarehouseId, customerDistrictId, customerId);
@@ -549,11 +577,12 @@ public class Client {
             }
             default -> {
                 log.error("Does not support this mode: {}", mode);
-                return false;
+                return new TransactionResult();
             }
         }
     }
-    public boolean TPCC_paymentWW(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
+    public TransactionResult TPCC_paymentWW(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
+        TransactionResult res = new TransactionResult();
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String tx = initResult.getMessage();
@@ -566,7 +595,8 @@ public class Client {
                 if (warehouse.isEmpty()) {
                     log.info("warehouse does not exists");
                     commit(tx);
-                    return false;
+                    return res;
+
                 }
 
 //            update warehouse
@@ -602,19 +632,19 @@ public class Client {
                 insertHistory(warehouseId, districtId, paymentAmount, customerWarehouseId, customerDistrictId, customerId, tx);
 
 
-                commit(tx);
-                return true;
+                return getCommitResult(tx, res);
             } catch (Exception e) {
                 log.error(e.getMessage());
                 rollback(tx);
-                return false;
+                return res;
             }
         }
 
-        return false;
+        return res;
     }
 
-    public boolean TPCC_paymentBamboo(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
+    public TransactionResult TPCC_paymentBamboo(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
+        TransactionResult res = new TransactionResult();
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String tx = initResult.getMessage();
@@ -627,7 +657,7 @@ public class Client {
                 if (warehouse.isEmpty()) {
                     log.info("warehouse does not exists");
                     commit(tx);
-                    return false;
+                    return res;
                 }
 
 //            update warehouse
@@ -666,19 +696,19 @@ public class Client {
 
                 waitForCommit(tx);
 
-                commit(tx);
-                return true;
+                return getCommitResult(tx, res);
             } catch (Exception e) {
                 log.error(e.getMessage());
                 rollback(tx);
-                return false;
+                return res;
             }
         }
 
-        return false;
+        return res;
     }
 
-    public boolean TPCC_paymentSLW(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
+    public TransactionResult TPCC_paymentSLW(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId) {
+        TransactionResult res = new TransactionResult();
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String tx = initResult.getMessage();
@@ -694,7 +724,7 @@ public class Client {
                 if (warehouse.isEmpty()) {
                     log.info("warehouse does not exists");
                     commit(tx);
-                    return false;
+                    return res;
                 }
 
 //            update warehouse
@@ -729,16 +759,15 @@ public class Client {
                 insertHistory(warehouseId, districtId, paymentAmount, customerWarehouseId, customerDistrictId, customerId, tx);
 
 
-                commit(tx);
-                return true;
+                return getCommitResult(tx, res);
             } catch (Exception e) {
                 log.error(e.getMessage());
                 rollback(tx);
-                return false;
+                return res;
             }
         }
 
-        return false;
+        return res;
     }
 
     private void insertHistory(String warehouseId, String districtId, float paymentAmount, String customerWarehouseId, String customerDistrictId, String customerId, String tx) throws Exception {

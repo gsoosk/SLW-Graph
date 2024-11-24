@@ -9,5 +9,5 @@
         tasks_from: init_sql.yml
       vars:
         test_case: "tpcc" # tpcc | store
-        tpcc_scale: "1"
+        tpcc_scale: "32"
 

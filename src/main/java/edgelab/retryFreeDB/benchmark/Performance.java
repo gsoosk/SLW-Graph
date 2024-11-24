@@ -363,7 +363,7 @@ public class Performance {
 
 //            TODO: Refactor this function
         long startToWaitTime = System.currentTimeMillis();
-        Stats stats = new Stats(numRecords, 1000, resultFilePath, metricsFilePath, recordSize, 0, 0.0, 0, 20000, benchmarkMode.equals("store") ? res.getString("hotPlayers") : String.valueOf(NUM_OF_HOT_WAREHOUSE), HOT_RECORD_SELECTION_CHANCE, MAX_THREADS, res.getString("2PLMode"), operationDelay);
+        Stats stats = new Stats(5000, 1000, resultFilePath, metricsFilePath, recordSize, 0, 0.0, 0, 20000, benchmarkMode.equals("store") ? res.getString("hotPlayers") : String.valueOf(NUM_OF_HOT_WAREHOUSE), HOT_RECORD_SELECTION_CHANCE, MAX_THREADS, res.getString("2PLMode"), operationDelay);
 
         Integer numberOfItemsToRead = res.get("readItemNumber");
         Thread itemThread = null;
@@ -690,22 +690,22 @@ public class Performance {
 
     private void submitRequest(TPCCServerRequest request, Stats stats) {
         Future<Void> future = executor.submit(()->{
-            boolean success = true;
+            Client.TransactionResult result = new Client.TransactionResult();
             if (request.getType() == TPCCServerRequest.Type.PAYMENT) {
                 Map<String, String> tx = request.getValues();
-                success = client.TPCC_payment(tx.get("warehouseId"),
+                result = client.TPCC_payment(tx.get("warehouseId"),
                         tx.get("districtId"),
                         Float.parseFloat(tx.get("paymentAmount")),
                         tx.get("customerWarehouseId"),
                         tx.get("customerDistrictId"),
                         tx.get("customerId"));
-                if (!success) {
+                if (!result.isSuccess()) {
                     log.error("Unsuccessful TPCC Payment {}", tx);
                     submitRetry(request, stats);
                 }
             }
             else if (request.getType() == TPCCServerRequest.Type.NEW_ORDER) {
-               success = client.TPCC_newOrder(request.getValues().get("warehouseId"),
+                result = client.TPCC_newOrder(request.getValues().get("warehouseId"),
                        request.getValues().get("districtId"),
                        request.getValues().get("customerId"),
                        request.getValues().get("orderLineCount"),
@@ -714,9 +714,10 @@ public class Performance {
                        request.getArrayValues().get("supplierWarehouseIds"),
                        request.getArrayValues().get("orderQuantities"));
 
-                if (!success) {
+                if (!result.isSuccess()) {
                     if (!request.isUserAbort()) {
                         log.error("Unsuccessful TPCC new order {},{}", request.getValues(), request.getArrayValues());
+                        stats.addWaistedTime(result.getStart());
                         submitRetry(request, stats);
                     }
                     else {
@@ -725,8 +726,9 @@ public class Performance {
                 }
             }
 
-            if (success) {
+            if (result.isSuccess()) {
                 stats.nextCompletion(request.start, 1);
+                stats.addUsefulWork(result.getStart(), result.getWaitingTime());
                 log.info("request successful {}:{}", request.getType(),request.getValues());
             }
             return null;
@@ -1240,6 +1242,10 @@ public class Performance {
         private String mode;
         private int operationDelay;
 
+        private long usefulWorkTime;
+        private long waitedTime;
+        private long wastedTimeWork;
+
         // Metrics
         private static final Summary finishedRequestsBytes = Summary.build()
                 .name("paxos_requests_finished_bytes")
@@ -1330,6 +1336,9 @@ public class Performance {
             createResultCSVFiles(resultFilePath);
             this.operationDelay = operationDelay;
             this.mode = mode;
+            this.usefulWorkTime = 0;
+            this.waitedTime = 0;
+            this.wastedTimeWork = 0;
         }
 
         private void createResultCSVFiles(String resultFilePath) {
@@ -1340,7 +1349,7 @@ public class Performance {
 
                 // Check if the file already exists to avoid overwriting it
                 if (!Files.exists(path)) {
-                    String CSVHeader = "num of records, mode, operation_delay, hot_records, prob, threads, throughput(tx/s), item_read(tx/s), request_retried, total_retries, avg_retry_per_request, avg_latency, max_latency, 50th_latency, 95th_latency, 99th_latency, 99.9th_latency \n";
+                    String CSVHeader = "num of records, mode, operation_delay, hot_records, prob, threads, throughput(tx/s), item_read(tx/s), request_retried, total_retries, avg_retry_per_request, avg_latency, max_latency, 50th_latency, 95th_latency, 99th_latency, 99.9th_latency, useful_time, waited_time, wasted_time\n";
                     BufferedWriter out = new BufferedWriter(new FileWriter(resultFilePath));
 
                     // Writing the header to output stream
@@ -1456,7 +1465,7 @@ public class Performance {
             int numOfRetries = retries.size();
             int totalRetries = retries.values().stream().mapToInt(Integer::intValue).sum();
             Double avgRetryPerReq = retries.isEmpty() ? 0.0 : retries.values().stream().mapToInt(Integer::intValue).average().getAsDouble();
-            System.out.printf("%d records sent, %f records/sec (%.3f KB/sec) of (%.3f KB/sec), %.3f items/sec, %.2f ms avg latency, %.2f ms max latency, %d ms 50th, %d ms 95th, %d ms 99th, %d ms 99.9th.%n --  requests retried: %d, retries: %d, avg retry per request: %.2f\n",
+            System.out.printf("%d records sent, %f records/sec (%.3f KB/sec) of (%.3f KB/sec), %.3f items/sec, %.2f ms avg latency, %.2f ms max latency, %d ms 50th, %d ms 95th, %d ms 99th, %d ms 99.9th.%n --  requests retried: %d, retries: %d, avg retry per request: %.2f, useful work time: %d, waited time: %d, wasted time: %d\n",
                     count,
                     recsPerSec,
                     mbPerSec,
@@ -1470,11 +1479,15 @@ public class Performance {
                     percs[3],
                     numOfRetries,
                     totalRetries,
-                    avgRetryPerReq);
+                    avgRetryPerReq,
+                    usefulWorkTime,
+                    waitedTime,
+                    wastedTimeWork
+                    );
 
             System.out.println("");
 
-            String resultCSV = String.format("%d,%s,%d,%s,%d,%d,%.2f,%.2f,%d,%d,%.2f,%.2f,%.2f,%d,%d,%d,%d\n",
+            String resultCSV = String.format("%d,%s,%d,%s,%d,%d,%.2f,%.2f,%d,%d,%.2f,%.2f,%.2f,%d,%d,%d,%d,%d,%d,%d\n",
                     count,
                     mode,
                     operationDelay,
@@ -1491,7 +1504,10 @@ public class Performance {
                     percs[0],
                     percs[1],
                     percs[2],
-                    percs[3]);
+                    percs[3],
+                    usefulWorkTime,
+                    waitedTime,
+                    wastedTimeWork);
             try {
                 BufferedWriter out = new BufferedWriter(
                         new FileWriter(resultFilePath, true));
@@ -1572,6 +1588,17 @@ public class Performance {
             if (warmup)
                 return;
             this.itemCount++;
+        }
+
+        public void addUsefulWork(long start, long waitingTime) {
+            long now = System.currentTimeMillis();
+            this.usefulWorkTime += ((now - start) - waitingTime);
+            this.waitedTime += waitingTime;
+        }
+
+        public void addWaistedTime(long start) {
+            long now = System.currentTimeMillis();
+            this.wastedTimeWork += (now - start);
         }
     }
 

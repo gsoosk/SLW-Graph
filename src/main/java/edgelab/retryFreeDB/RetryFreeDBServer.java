@@ -303,8 +303,9 @@ public class RetryFreeDBServer {
             try {
                 repo.release(tx, toBeAbortedTransactions);
                 transactions.remove(transactionId.getId());
-                log.warn("{}, Transaciton commited", transactionId.getId());
-                responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("released").build());
+                log.warn("{}, Transaciton commited, total waiting time: {}", transactionId.getId(), tx.getWaitingTime());
+                responseObserver.onNext(Result.newBuilder().setStatus(true)
+                        .putReturns("waiting_time", String.valueOf(tx.getWaitingTime())).setMessage("released").build());
                 responseObserver.onCompleted();
             } catch (SQLException e) {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not release the locks").build());
@@ -324,9 +325,10 @@ public class RetryFreeDBServer {
             DBTransaction tx = transactions.get(transactionId);
             try {
                 repo.rollback(tx, toBeAbortedTransactions);
-                transactions.remove(tx);
-                log.warn("{}, Transaciton rollbacked", tx);
-                responseObserver.onNext(Result.newBuilder().setStatus(finalStatus).setMessage("rollbacked").build());
+                transactions.remove(tx.toString());
+                log.warn("{}, Transaciton rollbacked, total waiting time: {}", tx, tx.getWaitingTime());
+                responseObserver.onNext(Result.newBuilder().setStatus(finalStatus)
+                        .putReturns("waiting_time", String.valueOf(tx.getWaitingTime())).setMessage("rollbacked").build());
                 responseObserver.onCompleted();
             } catch (SQLException e) {
 

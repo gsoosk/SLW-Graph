@@ -15,6 +15,11 @@ public class DBTransaction {
     @Getter
     private Connection connection;
 
+
+    @Getter
+    private long waitingTime;
+    private long previousWaitStart = -1;
+
     @Getter
     private final Set<String> resources = ConcurrentHashMap.newKeySet();
     private final AtomicInteger commitSemaphore;
@@ -24,6 +29,7 @@ public class DBTransaction {
         this.abort = false;
         this.connection = connection;
         commitSemaphore = new AtomicInteger(0);
+        this.waitingTime = 0;
     }
 
     @Override
@@ -73,4 +79,13 @@ public class DBTransaction {
         }
     }
 
+    public void startWaiting() {
+        previousWaitStart = System.currentTimeMillis();
+    }
+
+
+    public void wakesUp() {
+        if (previousWaitStart != -1)
+            this.waitingTime += (System.currentTimeMillis() - previousWaitStart);
+    }
 }
