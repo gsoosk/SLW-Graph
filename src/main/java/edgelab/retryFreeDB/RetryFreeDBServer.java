@@ -1,5 +1,6 @@
 package edgelab.retryFreeDB;
 
+import edgelab.proto.Config;
 import edgelab.proto.Data;
 import edgelab.proto.Empty;
 import edgelab.proto.TransactionId;
@@ -20,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -185,7 +187,7 @@ public class RetryFreeDBServer {
                     responseObserver.onCompleted();
                     return;
                 }
-                updateDBDataOnRepo(responseObserver, d, tx.getConnection());
+                updateDBDataOnRepo(responseObserver, d, tx);
             }
             else {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not deserialize data").build());
@@ -203,7 +205,7 @@ public class RetryFreeDBServer {
 
             if (d != null) {
                 log.info("{}: update on {}", tx, request.getKey());
-                updateDBDataOnRepo(responseObserver, d, tx.getConnection());
+                updateDBDataOnRepo(responseObserver, d, tx);
             }
             else {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not deserialize data").build());
@@ -211,17 +213,17 @@ public class RetryFreeDBServer {
             }
         }
 
-        private void updateDBDataOnRepo(StreamObserver<Result> responseObserver, DBData d, Connection conn) {
+        private void updateDBDataOnRepo(StreamObserver<Result> responseObserver, DBData d, DBTransaction tx) {
             try {
                 String result = "done";
                 if (d instanceof DBDeleteData)
-                    repo.remove(conn, (DBDeleteData) d);
+                    repo.remove(tx.getConnection(), (DBDeleteData) d);
                 else if (d instanceof DBWriteData)
-                    repo.update(conn, (DBWriteData) d);
+                    repo.update(tx.getConnection(), (DBWriteData) d);
                 else if(d instanceof DBInsertData)
-                    repo.insert(conn, (DBInsertData) d);
+                    repo.insert(tx.getConnection(), (DBInsertData) d);
                 else
-                    result = repo.get(conn, d);
+                    result = repo.get(tx, d);
                 responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(result).build());
                 responseObserver.onCompleted();
             }
@@ -301,8 +303,9 @@ public class RetryFreeDBServer {
             try {
                 repo.release(tx, toBeAbortedTransactions);
                 transactions.remove(transactionId.getId());
-                log.warn("{}, Transaciton commited", transactionId.getId());
-                responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("released").build());
+                log.warn("{}, Transaciton commited, total waiting time: {}", transactionId.getId(), tx.getWaitingTime());
+                responseObserver.onNext(Result.newBuilder().setStatus(true)
+                        .putReturns("waiting_time", String.valueOf(tx.getWaitingTime())).setMessage("released").build());
                 responseObserver.onCompleted();
             } catch (SQLException e) {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not release the locks").build());
@@ -322,9 +325,10 @@ public class RetryFreeDBServer {
             DBTransaction tx = transactions.get(transactionId);
             try {
                 repo.rollback(tx, toBeAbortedTransactions);
-                transactions.remove(tx);
-                log.warn("{}, Transaciton rollbacked", tx);
-                responseObserver.onNext(Result.newBuilder().setStatus(finalStatus).setMessage("rollbacked").build());
+                transactions.remove(tx.toString());
+                log.warn("{}, Transaciton rollbacked, total waiting time: {}", tx, tx.getWaitingTime());
+                responseObserver.onNext(Result.newBuilder().setStatus(finalStatus)
+                        .putReturns("waiting_time", String.valueOf(tx.getWaitingTime())).setMessage("rollbacked").build());
                 responseObserver.onCompleted();
             } catch (SQLException e) {
 
@@ -370,6 +374,31 @@ public class RetryFreeDBServer {
                 responseObserver.onCompleted();
             }
 
+
+        }
+
+
+        @Override
+        public void setConfig(Config config, StreamObserver<Result> responseObserver) {
+            Map<String, String> configMap = config.getValuesMap();
+            try {
+                if (configMap.containsKey("mode")) {
+                    Postgres.setMode(configMap.get("mode"));
+                    log.info("2pl mode is set to :{}", configMap.get("mode"));
+                }
+
+                if (configMap.containsKey("operationDelay")) {
+                    Postgres.OPERATION_THINKING_TIME = Integer.parseInt(configMap.get("operationDelay"));
+                    log.info("operation thinking time is set to {}", Integer.parseInt(configMap.get("operationDelay")));
+                }
+
+                responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
+                responseObserver.onCompleted();
+            }
+            catch (Exception e) {
+                responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Error:" + e.getMessage()).build());
+                responseObserver.onCompleted();
+            }
 
         }
 

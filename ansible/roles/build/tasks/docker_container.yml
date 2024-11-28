@@ -1,0 +1,22 @@
+- name: Create target directory
+  file:
+    path: app
+    state: directory
+    mode: 0755
+
+
+- name: copy file to remote
+  copy:
+    src: "Dockerfile"
+    dest: "./app"
+  become: yes
+
+
+- name: Build an image
+  community.docker.docker_image:
+    build:
+      path: ./app
+    name: java-app
+    tag: latest
+    source: build
+  become: yes

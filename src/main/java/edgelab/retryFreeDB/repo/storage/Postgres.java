@@ -1,9 +1,11 @@
 package edgelab.retryFreeDB.repo.storage;
 
+import com.google.common.base.Joiner;
 import edgelab.retryFreeDB.repo.storage.DTO.DBData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBDeleteData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBInsertData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBWriteData;
+import edgelab.retryFreeDB.repo.storage.util.BiKeyHashMap;
 import lombok.extern.slf4j.Slf4j;
 import org.postgresql.PGConnection;
 
@@ -20,32 +22,67 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
 public class Postgres implements Storage{
     private static final String DEADLOCK_ERROR = "40P01";
-    public static boolean WOUND_WAIT_ENABLE = true;
-    public static boolean BAMBOO_ENABLE = true;
-    public static boolean SHARED_LOCK_ENABLE = true;
+    private static boolean WOUND_WAIT_ENABLE = true;
+    private static boolean BAMBOO_ENABLE = true;
+    private static final boolean SHARED_LOCK_ENABLE = true;
+
+    public static void setMode(String mode) throws Exception {
+        switch (mode) {
+            case "slw" -> {
+                Postgres.BAMBOO_ENABLE = false;
+                Postgres.WOUND_WAIT_ENABLE = false;
+                DBLock.BAMBOO_ENABLE = false;
+            }
+            case "ww" -> {
+                Postgres.BAMBOO_ENABLE = false;
+                Postgres.WOUND_WAIT_ENABLE = true;
+                DBLock.BAMBOO_ENABLE = false;
+            }
+            case "bamboo" -> {
+                Postgres.BAMBOO_ENABLE = true;
+                Postgres.WOUND_WAIT_ENABLE = true;
+                DBLock.BAMBOO_ENABLE = true;
+            }
+            default -> throw new Exception("This mode of 2pl is not supported by server");
+        }
+    }
+
     private static String url = "";
     private static final String user = "user";
     private static final String password = "password";
 
     private static final long LOCK_THINKING_TIME = 0;
-    private static final long OPERATION_THINKING_TIME = 10;
+    public static  long OPERATION_THINKING_TIME = 10;
 
     private String partitionId;
 
-    private final ConcurrentHashMap<String, Lock> resourceLocks = new ConcurrentHashMap<>();
-    private Lock getLock(String resource) {
-        return resourceLocks.computeIfAbsent(resource, k -> new ReentrantLock());
-    }
-
+    private final BiKeyHashMap<String, String, String> dirtyReads = new BiKeyHashMap<>(); // <tx, resource, value>
 
     public Postgres(String addr, String port) {
         url = "jdbc:postgresql://" + addr + ":" + port + "/postgres";
+        setPostgresLogLevel("DEBUG1");
+    }
+
+    private void setPostgresLogLevel(String level) {
+        try (Connection conn = DriverManager.getConnection(url, user, password);
+             Statement stmt = conn.createStatement()) {
+
+            // Set global log level for all sessions
+
+            stmt.execute("ALTER SYSTEM SET log_min_messages TO 'INFO';");
+
+            // Reload the configuration for changes to take effect
+            stmt.execute("SELECT pg_reload_conf();");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+
     }
 
     private void setDeadlockDetectionTimeout(Connection conn, String timeout) throws SQLException {
@@ -94,61 +131,61 @@ public class Postgres implements Storage{
         return "data" + partitionId;
     }
 
-    public String get(String key) {
-        String SQL = "SELECT value FROM " + getTable() + " WHERE key = ?";
-        String value = null;
+//    public String get(String key) {
+//        String SQL = "SELECT value FROM " + getTable() + " WHERE key = ?";
+//        String value = null;
+//
+//        try (Connection conn = connect();
+//             PreparedStatement pstmt = conn.prepareStatement(SQL)) {
+//
+//            pstmt.setString(1, key);
+//            ResultSet rs = pstmt.executeQuery();
+//            if (rs.next())
+//                value = rs.getString("value");
+//
+//        } catch (SQLException ex) {
+//            log.info(ex.getMessage());
+//        }
+//
+//        return value;
+//    }
 
-        try (Connection conn = connect();
-             PreparedStatement pstmt = conn.prepareStatement(SQL)) {
+//    public Boolean containsKey(String key) {
+//        String SQL = "SELECT value FROM " + getTable() +  " WHERE key = ?";
+//
+//        try (Connection conn = connect();
+//             PreparedStatement pstmt = conn.prepareStatement(SQL)) {
+//
+//            pstmt.setString(1, key);
+//            ResultSet rs = pstmt.executeQuery();
+//            if (rs.next())
+//                return true;
+//
+//        } catch (SQLException ex) {
+//            log.info(ex.getMessage());
+//        }
+//
+//        return false;
+//    }
 
-            pstmt.setString(1, key);
-            ResultSet rs = pstmt.executeQuery();
-            if (rs.next())
-                value = rs.getString("value");
-
-        } catch (SQLException ex) {
-            log.info(ex.getMessage());
-        }
-
-        return value;
-    }
-
-    public Boolean containsKey(String key) {
-        String SQL = "SELECT value FROM " + getTable() +  " WHERE key = ?";
-
-        try (Connection conn = connect();
-             PreparedStatement pstmt = conn.prepareStatement(SQL)) {
-
-            pstmt.setString(1, key);
-            ResultSet rs = pstmt.executeQuery();
-            if (rs.next())
-                return true;
-
-        } catch (SQLException ex) {
-            log.info(ex.getMessage());
-        }
-
-        return false;
-    }
-
-    public void put(String key, String value) {
-        String insertSQL = "INSERT INTO "+ getTable() +" (key, value) " +
-                "VALUES (?,?)" +
-                "ON CONFLICT (key) DO UPDATE " +
-                "    SET value = excluded.value; ";
-
-        try (Connection conn = connect();
-             PreparedStatement pstmt = conn.prepareStatement(insertSQL)) {
-
-            pstmt.setString(1, key);
-            pstmt.setString(2, value);
-
-            pstmt.executeUpdate();
-        } catch (SQLException ex) {
-            log.info(ex.getMessage());
-        }
-    }
-
+//    public void put(String key, String value) {
+//        String insertSQL = "INSERT INTO "+ getTable() +" (key, value) " +
+//                "VALUES (?,?)" +
+//                "ON CONFLICT (key) DO UPDATE " +
+//                "    SET value = excluded.value; ";
+//
+//        try (Connection conn = connect();
+//             PreparedStatement pstmt = conn.prepareStatement(insertSQL)) {
+//
+//            pstmt.setString(1, key);
+//            pstmt.setString(2, value);
+//
+//            pstmt.executeUpdate();
+//        } catch (SQLException ex) {
+//            log.info(ex.getMessage());
+//        }
+//    }
+//
 
     public void remove(String key) {
 
@@ -227,7 +264,7 @@ public class Postgres implements Storage{
     private final Map<String, DBLock> locks = new HashMap<>();
     private final ConcurrentHashMap<String, Set<String>> transactionResources = new ConcurrentHashMap<>();
     public void lock(DBTransaction tx, Set<DBTransaction> toBeAborted, DBData data) throws Exception {
-        String resource = (data instanceof DBInsertData) ? data.getTable() +  ","  + ((DBInsertData) data).getRecordId() : data.getTable() +  ","  + data.getQuery();
+        String resource = getResource(data);
         DBLock lock;
         LockType lockType = LockType.WRITE;
         if (SHARED_LOCK_ENABLE)
@@ -241,6 +278,10 @@ public class Postgres implements Storage{
 
 
         synchronized (lock) {
+            if (tx.isAbort()) {
+                log.error("Transaction is aborted. Could not lock");
+                throw new Exception("Transaction aborted. can not lock");
+            }
 
             if (!lock.isHeldBefore(tx, lockType)) {
 
@@ -258,12 +299,14 @@ public class Postgres implements Storage{
                 while (!lock.isHeldBefore(tx, lockType)) {
                     try {
                         log.info("{}: waiting for lock on {}", tx, resource);
+                        tx.startWaiting();
                         lock.wait();
                         if (tx.isAbort()) {
                             log.error("Transaction is aborted. Could not lock");
                             throw new Exception("Transaction aborted. can not lock");
                         }
                         log.info("{}: wakes up to check the lock {}", tx, resource);
+                        tx.wakesUp();
 
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
@@ -275,6 +318,10 @@ public class Postgres implements Storage{
         }
 
         delay(LOCK_THINKING_TIME);
+    }
+
+    private static String getResource(DBData data) {
+        return (data instanceof DBInsertData) ? data.getTable() + "," + ((DBInsertData) data).getRecordId() : data.getTable() + "," + Joiner.on(",").join(data.getQueries());
     }
 
     private void addNewResourceForTransaction(String tx, String resource) {
@@ -395,7 +442,14 @@ public class Postgres implements Storage{
 
 
     public void unlock(DBTransaction tx, DBData data, Set<DBTransaction> toBeAborted) throws SQLException {
-        String resource = (data instanceof DBInsertData) ? data.getTable() +  ","  + ((DBInsertData) data).getRecordId() : data.getTable() +  ","  + data.getQuery();
+        String resource = getResource(data);
+
+        String dirtyRead = read(tx.getConnection(), data).toString();
+        synchronized (dirtyReads) {
+            log.info("{}: adding dirty read for {}", tx, resource);
+            dirtyReads.put(tx.toString(), resource, dirtyRead);
+        }
+
         releaseLock(tx, resource, toBeAborted);
     }
 
@@ -479,7 +533,14 @@ public class Postgres implements Storage{
                 releaseLock(tx, resource, toBeAborted);
             }
             tx.clearResources();
+
+            synchronized (dirtyReads) {
+                log.info("{}: removing dirty reads for tx", tx);
+                dirtyReads.removeByTransaction(tx.toString());
+            }
         }
+
+
     }
 
     public void retireLock(DBTransaction tx, DBData data) throws Exception {
@@ -487,7 +548,7 @@ public class Postgres implements Storage{
             throw new Exception("Bamboo is not enabled!");
 
 
-        String resource = (data instanceof DBInsertData) ? data.getTable() +  ","  + ((DBInsertData) data).getRecordId() : data.getTable() +  ","  + data.getQuery();
+        String resource = getResource(data);
         DBLock lock;
 
         log.info("{}, retiring the lock {}", tx, resource);
@@ -507,6 +568,12 @@ public class Postgres implements Storage{
                 lock.promoteWaiters();
                 lock.notifyAll(); // Notify all waiting threads
             }
+
+            String dirtyRead = read(tx.getConnection(), data).toString();
+            synchronized (dirtyReads) {
+                log.info("{}: adding dirty read for {}", tx, resource);
+                dirtyReads.put(tx.toString(), resource, dirtyRead);
+            }
         }
         else {
             log.error("{}, Lock was not held to be retired!", tx);
@@ -523,33 +590,33 @@ public class Postgres implements Storage{
 //    }
 
 
+//
+//    private static void unlockAdvisory(Connection conn, String tableName, Integer id) throws SQLException {
+//        String lockSQL = "SELECT pg_advisory_unlock('" + tableName + "'::regclass::integer, ?)";
+//        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+//            updateStmt.setInt(1, id);
+//            updateStmt.executeQuery();
+//        } catch (SQLException ex) {
+//            log.error("db error: couldn't unlock,  {}", ex.getMessage());
+//            throw ex;
+//        }
+//        log.info("Advisory lock unlocked {},{}", tableName, id);
+//    }
 
-    private static void unlockAdvisory(Connection conn, String tableName, Integer id) throws SQLException {
-        String lockSQL = "SELECT pg_advisory_unlock('" + tableName + "'::regclass::integer, ?)";
-        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
-            updateStmt.setInt(1, id);
-            updateStmt.executeQuery();
-        } catch (SQLException ex) {
-            log.error("db error: couldn't unlock,  {}", ex.getMessage());
-            throw ex;
-        }
-        log.info("Advisory lock unlocked {},{}", tableName, id);
-    }
-
-
-    public void lockTable(Connection conn, DBInsertData data) throws SQLException {
-        log.info("Acquiring table lock for data");
-//        FIXME: Risk of sql injection
-        String lockSQL = "LOCK TABLE "+ data.getTable() +" IN ACCESS EXCLUSIVE";
-        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
-            updateStmt.executeQuery();
-        }
-        catch (SQLException ex) {
-            log.info("db error: couldn't lock the table,  {}", ex.getMessage());
-            throw ex;
-        }
-        log.info("Locks on table {} acquired", data.getTable());
-    }
+//
+//    public void lockTable(Connection conn, DBInsertData data) throws SQLException {
+//        log.info("Acquiring table lock for data");
+////        FIXME: Risk of sql injection
+//        String lockSQL = "LOCK TABLE "+ data.getTable() +" IN ACCESS EXCLUSIVE";
+//        try (PreparedStatement updateStmt = conn.prepareStatement(lockSQL)) {
+//            updateStmt.executeQuery();
+//        }
+//        catch (SQLException ex) {
+//            log.info("db error: couldn't lock the table,  {}", ex.getMessage());
+//            throw ex;
+//        }
+//        log.info("Locks on table {} acquired", data.getTable());
+//    }
     public void release(DBTransaction tx, Set<DBTransaction> toBeAborted) throws SQLException {
         try {
             Connection conn = tx.getConnection();
@@ -581,10 +648,17 @@ public class Postgres implements Storage{
     }
     public void remove(Connection conn, DBDeleteData data) throws SQLException {
 
-        String SQL = "DELETE FROM "+ data.getTable() +" WHERE " + data.getId() + " = ?";
+        String SQL = "DELETE FROM "+ data.getTable() +" WHERE ";
+        for (int i = 0 ; i < data.getIds().size(); i++) {
+            if (i != 0)
+                SQL += "AND ";
+            SQL += data.getIds().get(i) + " = ? ";
+        }
+
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
-            pstmt.setInt(1, data.getQuery());
+            for (int i = 1; i <= data.getQueries().size() ; i++)
+                pstmt.setInt(i, data.getQueries().get(i-1));
             pstmt.executeUpdate();
             delay(OPERATION_THINKING_TIME);
         } catch (SQLException e) {
@@ -594,11 +668,18 @@ public class Postgres implements Storage{
     }
 
     public void update(Connection conn, DBWriteData data) throws SQLException {
-        String SQL = "UPDATE " + data.getTable() + " SET  " + data.getVariable() + " = " + data.getValue() + " WHERE "+ data.getId() +" = ?";
-        log.info("update {}:<{}, {}>", data.getTable(), data.getId(), data.getQuery());
+        String SQL = "UPDATE " + data.getTable() + " SET  " + data.getVariable() + " = " + data.getValue() + " WHERE ";
+        for (int i = 0 ; i < data.getIds().size(); i++) {
+            if (i != 0)
+                SQL += "AND ";
+            SQL += data.getIds().get(i) + " = ? ";
+        }
+
+        log.info("update {}:<{}, {}>", data.getTable(), data.getIds(), data.getQueries());
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
-            pstmt.setInt(1, data.getQuery());
+            for (int i = 1; i <= data.getQueries().size() ; i++)
+                pstmt.setInt(i, data.getQueries().get(i-1));
             pstmt.executeUpdate();
             delay(OPERATION_THINKING_TIME);
         } catch (SQLException e) {
@@ -608,13 +689,35 @@ public class Postgres implements Storage{
     }
 
 
-    public String get(Connection conn, DBData data) throws SQLException {
+    public String get(DBTransaction tx, DBData data) throws SQLException {
+        String resource = getResource(data);
+
+        synchronized (dirtyReads) {
+            if (dirtyReads.containsResource(resource)) {
+                log.info("{}: dirty read of {}", tx, resource);
+                delay(OPERATION_THINKING_TIME);
+                return dirtyReads.getByResource(resource);
+            }
+        }
+
+        StringBuilder value = read(tx.getConnection(), data);
+        delay(OPERATION_THINKING_TIME);
+        return value.toString();
+    }
+
+    private static StringBuilder read(Connection conn, DBData data) throws SQLException {
         StringBuilder value = new StringBuilder();
-        String SQL = "SELECT * FROM "+ data.getTable() +" WHERE "+data.getId()+" = ?";
-        log.info("get {}:{}", data.getTable(), data.getId());
+        String SQL = "SELECT * FROM "+ data.getTable() +" WHERE ";
+        for (int i = 0; i < data.getIds().size(); i++) {
+            if (i != 0)
+                SQL += "AND ";
+            SQL += data.getIds().get(i) + " = ? ";
+        }
+        log.info("get {}:{}", data.getTable(), data.getIds());
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
-            pstmt.setInt(1, data.getQuery());
+            for (int i = 1; i <= data.getQueries().size() ; i++)
+                pstmt.setInt(i, data.getQueries().get(i-1));
             ResultSet rs = pstmt.executeQuery();
             ResultSetMetaData metaData = rs.getMetaData();
             int columnCount = metaData.getColumnCount();
@@ -630,18 +733,17 @@ public class Postgres implements Storage{
                         value.append(",");
                 }
             }
-            delay(OPERATION_THINKING_TIME);
         } catch (SQLException ex) {
             log.error("could not read: {}", ex.getMessage());
             throw ex;
         }
-
-        return value.toString();
+        return value;
     }
 
 
     public void insert(Connection conn, DBInsertData data) throws SQLException {
-        String SQL = "INSERT INTO " + data.getTable() + " VALUES  (" + data.getRecordId() + "," + data.getNewRecord() + ")";
+        String SQL = data.getNewRecord().isEmpty() ? "INSERT INTO " + data.getTable() + " VALUES  (" + data.getRecordId() + ")"
+                : "INSERT INTO " + data.getTable() + " VALUES  (" + data.getRecordId() + "," + data.getNewRecord() + ")";
         log.info("insert {}:{}", data.getTable(), data.getRecordId());
         try {
             PreparedStatement pstmt = conn.prepareStatement(SQL);
@@ -688,6 +790,9 @@ public class Postgres implements Storage{
     }
 
 
+    public void partialCommit(DBTransaction tx) throws SQLException {
+        tx.getConnection().commit();
+    }
 }
 
 

@@ -29,7 +29,7 @@ class DBLock {
     private final Map<DBTransaction, LockType> pendingLockTypes;
 
 
-    private static final boolean BAMBOO_ENABLE = Postgres.BAMBOO_ENABLE;
+    public static boolean BAMBOO_ENABLE = false;
 
     public DBLock(String resource) {
         this.resource = resource;
@@ -57,12 +57,15 @@ class DBLock {
 
 
         if (lockType == LockType.WRITE) {
-//            either no lock held or the same tx has a read lock
+//            either no lock held or the same tx has a read lock (upgrade r->w)
             if (holdingTransactions.isEmpty() || (holdingTransactions.size() == 1 && holdingTransactions.contains(transaction)))
                     if (pendingTransactions.contains(transaction) && pendingTransactions.peek().equals(transaction))
                         return true;
         }
         else {
+            // Can grant read lock if the same transaction has a write lock on it (upgrade w->r)
+            if (ownersLockType == LockType.WRITE && (!holdingTransactions.isEmpty() && holdingTransactions.contains(transaction)))
+                return true;
             // Can grant read lock if no write lock is held
             if (ownersLockType == LockType.WRITE)
                 return false;
@@ -95,7 +98,10 @@ class DBLock {
 //                        if (conflict(pendingLockTypes.get(t), ownersLockType))
 //                            break;
 //
+            boolean upgrade = false;
             if (canGrant(t, pendingLockTypes.get(t))) {
+                if (isGoingToBeUpgraded(t, pendingLockTypes.get(t)))
+                    upgrade = true;
                 log.info("promoting transaction {}", t.toString());
                 grant(t, pendingLockTypes.get(t));
             }
@@ -105,14 +111,24 @@ class DBLock {
 
             if (BAMBOO_ENABLE) {
                 for (DBTransaction tp : retiredTransactions) {
-                    if (conflict(retiredLockTypes.get(tp), lockType)) {
-                        log.info("commit semaphore increased for transaction {}", t);
-                        t.incCommitSemaphore();
-                        break;
-                    }
+                    if (!upgrade) // do not increase commit semaphore twice for an upgrade lock
+                        if (conflict(retiredLockTypes.get(tp), lockType)) {
+
+                            log.info("commit semaphore increased for transaction {}", t);
+                            t.incCommitSemaphore();
+                            break;
+                        }
                 }
             }
         }
+    }
+
+    private boolean isGoingToBeUpgraded(DBTransaction transaction, LockType lockType) {
+        if (lockType == LockType.WRITE)
+            return (holdingTransactions.size() == 1 && holdingTransactions.contains(transaction));
+        else
+            return (!holdingTransactions.isEmpty() && holdingTransactions.contains(transaction));
+
     }
 
     public synchronized boolean conflict(DBTransaction holdingTransaction, DBTransaction transaction, LockType lockType) {

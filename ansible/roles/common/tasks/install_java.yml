@@ -6,7 +6,7 @@
 
 - name: Install Java package (Ubuntu/Debian)
   apt:
-    name: openjdk-17-jdk
+    name: openjdk-21-jdk
     state: present
 
 - name: install the latest version of Apache Maven

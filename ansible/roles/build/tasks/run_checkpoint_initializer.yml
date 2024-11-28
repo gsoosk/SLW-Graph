@@ -1,0 +1,4 @@
+- name: run checkpoint initializer
+  shell:
+    cmd: "java -jar {{jar}}.jar {{size}} checkpoint"
+    chdir: 'rocksdb'
