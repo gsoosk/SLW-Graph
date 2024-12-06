@@ -117,6 +117,6 @@ named arguments:
                                                                                                        
 ```
 ### Automated Benchmark
-We provide some docker-compose and shell script scripts run `server` and `benchmark` programs automatically. For these scripts please refer to (here)[https://github.com/gsoosk/Brook-2PL/tree/main/ansible/roles/build/files]
+We provide some docker-compose and shell script scripts run `server` and `benchmark` programs automatically. For these scripts please refer to [here](https://github.com/gsoosk/Brook-2PL/tree/main/ansible/roles/build/files)
 
 
