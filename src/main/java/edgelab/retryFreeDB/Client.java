@@ -41,10 +41,15 @@ public class Client {
         @Getter
         long start;
 
+        @Setter
+        @Getter
+        String message;
+
         public TransactionResult() {
             this.success = false;
             this.waitingTime = 0;
             this.start = System.currentTimeMillis();
+            this.message = "";
         }
 
     }
@@ -905,18 +910,19 @@ public class Client {
 
 
 //    remoteCalls : 4
-    public String addListing(String PId, String IId, double price) {
+    public TransactionResult addListing(String PId, String IId, double price) {
         return switch (mode) {
             case "slw" -> addListingSLW(PId, IId, price);
             case "bamboo" -> addListingBamboo(PId, IId, price);
             case "ww" -> addListingWW(PId, IId, price);
-            default -> null;
+            default -> new TransactionResult();
         };
     }
 
-    public String addListingWW(String PId, String IId, double price) {
+    public TransactionResult addListingWW(String PId, String IId, double price) {
 
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
+        TransactionResult res = new TransactionResult();
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
             try {
@@ -934,13 +940,13 @@ public class Client {
                 if (item.isEmpty()) {
                     log.info("Item does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 //             Check the owner
                 if (Integer.parseInt(item.get("iowner")) != Integer.parseInt(PId)) {
                     log.info("item has a different owner! {}<>{}", item.get("iowner"), PId);
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
                 lock(transactionId, "Players", "PId", PId, READ_TYPE);
@@ -949,27 +955,29 @@ public class Client {
                 if (player.isEmpty()) {
                     log.info("player does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
                 Result insertListingResult = insertLock(transactionId, "Listings");
                 String listingRecordId = insertListingResult.getMessage();
                 insert(transactionId, "Listings", IId + "," + price, listingRecordId);
-                commit(transactionId);
-                return listingRecordId;
+                getCommitResult(transactionId, res);
+                res.setMessage(listingRecordId);
+                return res;
             } catch (Exception e) {
                 rollback(transactionId);
-                return null;
+                return res;
             }
         }
 
-        return null;
+        return res;
     }
 
 
     //    remoteCalls : 4
-    public String addListingBamboo(String PId, String IId, double price) {
+    public TransactionResult addListingBamboo(String PId, String IId, double price) {
 
+        TransactionResult res = new TransactionResult();
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
@@ -988,13 +996,13 @@ public class Client {
                 if (item.isEmpty()) {
                     log.info("Item does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 //             Check the owner
                 if (Integer.parseInt(item.get("iowner")) != Integer.parseInt(PId)) {
                     log.info("item has a different owner! {}<>{}", item.get("iowner"), PId);
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
 
@@ -1004,7 +1012,7 @@ public class Client {
                 if (player.isEmpty()) {
                     log.info("player does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
                 Result insertListingResult = insertLock(transactionId, "Listings");
@@ -1013,21 +1021,22 @@ public class Client {
 //
                 waitForCommit(transactionId);
 
-                commit(transactionId);
-                return listingRecordId;
+                getCommitResult(transactionId, res);
+                res.setMessage(listingRecordId);
+                return res;
             } catch (Exception e) {
                 rollback(transactionId);
-                return null;
+                return res;
             }
         }
 
-        return null;
+        return res;
     }
 
 
 
-    public String buyListingBamboo(String PId, String LId) {
-
+    public TransactionResult buyListingBamboo(String PId, String LId) {
+        TransactionResult res = new TransactionResult();
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
 
         if (initResult.getStatus()) {
@@ -1041,7 +1050,7 @@ public class Client {
                 if (listing.isEmpty()) {
                     log.info("listing does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
                 //            Read from P where pid
@@ -1052,14 +1061,14 @@ public class Client {
                 if (player.isEmpty()) {
                     log.info("player does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
                 //            Check players cash for listing
                 if (Double.parseDouble(player.get("pcash")) < Double.parseDouble(listing.get("lprice"))) {
                     log.info("player does not have enough cash");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
 
@@ -1070,7 +1079,7 @@ public class Client {
                 if (item.isEmpty()) {
                     log.info("item does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
 
@@ -1087,7 +1096,7 @@ public class Client {
                 if (prevOwner.isEmpty()) {
                     log.info("previous owner does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
 //          W into I where IId = Liid SET Iowner = pid
@@ -1111,14 +1120,15 @@ public class Client {
                 waitForCommit(transactionId);
 
 //            Unlock
-                commit(transactionId);
-                return listing.get("liid");
+                getCommitResult(transactionId, res);
+                res.setMessage(listing.get("liid"));
+                return res;
             } catch (Exception e) {
                 rollback(transactionId);
-                return null;
+                return res;
             }
         }
-        return null;
+        return res;
     }
 
     private Result waitForCommit(String transactionId) throws Exception {
@@ -1147,8 +1157,9 @@ public class Client {
     }
 
     //    Remote calls: 4
-    public String addListingSLW(String PId, String IId, double price) {
+    public TransactionResult addListingSLW(String PId, String IId, double price) {
         log.info("add listing <PID:{}, IID:{}>", PId, IId);
+        TransactionResult res = new TransactionResult();
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
         if (initResult.getStatus()) {
             String transactionId = initResult.getMessage();
@@ -1161,7 +1172,7 @@ public class Client {
                 if (Integer.parseInt(item.get("iowner")) != Integer.parseInt(PId)) {
                     log.error("item has a different owner! {}<>{}", item.get("iowner"), PId);
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
                 lock(transactionId, "Players", "PId", PId, READ_TYPE);
@@ -1171,30 +1182,33 @@ public class Client {
                 if (player.isEmpty()) {
                     log.error("player does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
                 insert(transactionId, "Listings", IId + "," + price, listingRecordId);
-                commit(transactionId);
-                return listingRecordId;
+                getCommitResult(transactionId, res);
+                res.setMessage(listingRecordId);
+                return res;
+
             } catch (Exception e) {
                 log.error(e.getMessage());
                 rollback(transactionId);
-                return null;
+                return res;
             }
         }
-        return null;
+        return res;
     }
-    public String buyListing(String PId, String LId) {
+    public TransactionResult buyListing(String PId, String LId) {
         return switch (mode) {
             case "slw" -> buyListingSLW(PId, LId);
             case "bamboo" -> buyListingBamboo(PId, LId);
             case "ww" -> buyListingWW(PId, LId);
-            default -> null;
+            default -> new TransactionResult();
         };
     }
-    public String buyListingWW(String PId, String LId) {
+    public TransactionResult buyListingWW(String PId, String LId) {
 
+        TransactionResult res = new TransactionResult();
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
 
         if (initResult.getStatus()) {
@@ -1208,7 +1222,7 @@ public class Client {
                 if (listing.isEmpty()) {
                     log.info("listing does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
                 //            Read from P where pid
@@ -1219,14 +1233,14 @@ public class Client {
                 if (player.isEmpty()) {
                     log.info("player does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
                 //            Check players cash for listing
                 if (Double.parseDouble(player.get("pcash")) < Double.parseDouble(listing.get("lprice"))) {
                     log.info("player does not have enough cash");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
 
@@ -1237,7 +1251,7 @@ public class Client {
                 if (item.isEmpty()) {
                     log.info("item does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
 
@@ -1254,7 +1268,7 @@ public class Client {
                 if (prevOwner.isEmpty()) {
                     log.info("previous owner does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
 //          W into I where IId = Liid SET Iowner = pid
@@ -1272,17 +1286,19 @@ public class Client {
                 write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash);
 
 //            Unlock
-                commit(transactionId);
-                return listing.get("liid");
+                getCommitResult(transactionId, res);
+                res.setMessage(listing.get("liid"));
+                return res;
             } catch (Exception e) {
                 rollback(transactionId);
-                return null;
+                return res;
             }
         }
-        return null;
+        return res;
     }
 
-    public String buyListingSLW(String PId, String LId) {
+    public TransactionResult buyListingSLW(String PId, String LId) {
+        TransactionResult res = new TransactionResult();
         log.info("buy listing <PID:{}, LID:{}>", PId, LId);
         Result initResult = blockingStub.beginTransaction(Empty.newBuilder().build());
 
@@ -1296,7 +1312,7 @@ public class Client {
                 if (listing.isEmpty()) {
                     log.error("listing does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
 //            Read from I where LIID
@@ -1306,7 +1322,7 @@ public class Client {
                 if (item.isEmpty()) {
                     log.error("item does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
 //            Lock Players where pid, ppid
@@ -1325,14 +1341,14 @@ public class Client {
                 if (player.isEmpty()) {
                     log.error("player does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
                 //            Check players cash for listing
                 if (Double.parseDouble(player.get("pcash")) < Double.parseDouble(listing.get("lprice"))) {
                     log.error("player does not have enough cash");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
 
@@ -1341,7 +1357,7 @@ public class Client {
                 if (prevOwner.isEmpty()) {
                     log.error("previous owner does not exists!");
                     commit(transactionId);
-                    return null;
+                    return res;
                 }
 
 
@@ -1363,15 +1379,16 @@ public class Client {
                 write(transactionId, "Players", "PId", PPId, "Pcash", prevOwnerNewCash);
 
 //            Unlock
-                commit(transactionId);
-                return listing.get("liid");
+                getCommitResult(transactionId, res);
+                res.setMessage(listing.get("liid"));
+                return res;
             } catch (Exception e) {
                 log.error(e.getMessage());
                 rollback(transactionId);
-                return null;
+                return res;
             }
         }
-        return null;
+        return res;
     }
 
     private Result unlock(String transactionId, String tableName, String key, String value) throws Exception {

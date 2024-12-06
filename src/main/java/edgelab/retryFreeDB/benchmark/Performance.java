@@ -701,6 +701,7 @@ public class Performance {
                         tx.get("customerId"));
                 if (!result.isSuccess()) {
                     log.error("Unsuccessful TPCC Payment {}", tx);
+                    stats.addWaistedTime(result.getStart());
                     submitRetry(request, stats);
                 }
             }
@@ -738,55 +739,55 @@ public class Performance {
 
     private void submitRequest(StoreServerRequest request, Stats stats) {
         Future<Void> future = executor.submit(() -> {
-            boolean success = true;
+            Client.TransactionResult result = new Client.TransactionResult();
 
             if (request.getType() == StoreServerRequest.Type.BUY) {
-                String newItem = client.buyListing(request.getValues().get("PId"), request.getValues().get("LId"));
-                if (newItem == null) {
-                    success = false;
+                result = client.buyListing(request.getValues().get("PId"), request.getValues().get("LId"));
+                if (!result.isSuccess()) {
+                    stats.addWaistedTime(result.getStart());
                     log.error("Unsuccessful buy {}", request.getValues());
                     // we do not retry records that are not hot!
 //                    submitRetry(request, stats);
                 }
             }
             else if (request.getType() == StoreServerRequest.Type.SELL) {
-                String newListing = client.addListing(request.getValues().get("PId"), request.getValues().get("IId"), 1);
-                if (newListing == null) {
-                    success = false;
+                result = client.addListing(request.getValues().get("PId"), request.getValues().get("IId"), 1);
+                if (!result.isSuccess()) {
+                    stats.addWaistedTime(result.getStart());
                     log.error("Unsuccessful sell {}", request.getValues());
                     // we do not retry records that are not hot!
 //                    submitRetry(request, stats);
                 }
             }
-
             else if (request.getType() == StoreServerRequest.Type.BUY_HOT) {
-                String newItem = client.buyListing(request.getValues().get("PId"), request.getValues().get("LId"));
-                if (newItem != null) {
-                    hotPlayersAndItems.get(request.getValues().get("PId")).add(newItem);
+                result = client.buyListing(request.getValues().get("PId"), request.getValues().get("LId"));
+                if (result.isSuccess()) {
+                    hotPlayersAndItems.get(request.getValues().get("PId")).add(result.getMessage());
                 }
                 else {
+                    stats.addWaistedTime(result.getStart());
                     if (!isGoingToRetry(request))
                         hotListings.put(request.getValues().get("LId"), List.of(request.getValues().get("IId"), request.getValues().get("price")));
                     log.error("Unsuccessful buy {}", request.getValues());
-                    success = false;
                     submitRetry(request, stats);
                 }
             }
             else if (request.getType() == StoreServerRequest.Type.SELL_HOT) {
-                String newListing = client.addListing(request.getValues().get("PId"), request.getValues().get("IId"), 1);
-                if (newListing != null) {
-                    hotListings.put(newListing, List.of(request.getValues().get("IId"), "1"));
+                result = client.addListing(request.getValues().get("PId"), request.getValues().get("IId"), 1);
+                if (result.isSuccess()) {
+                    hotListings.put(result.getMessage(), List.of(request.getValues().get("IId"), "1"));
                 }
                 else {
+                    stats.addWaistedTime(result.getStart());
                     if (!isGoingToRetry(request))
                         hotPlayersAndItems.get(request.getValues().get("PId")).add(request.getValues().get("IId"));
                     log.error("Unsuccessful sell {}", request.getValues());
-                    success = false;
                     submitRetry(request, stats);
                 }
             }
-            if (success) {
+            if (result.isSuccess()) {
                 stats.nextCompletion(request.start, 1);
+                stats.addUsefulWork(result.getStart(), result.getWaitingTime());
                 log.info("request successful {}", request.getValues());
             }
             return null;
