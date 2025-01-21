@@ -8,11 +8,11 @@ all:
 #            port: 8001
 #            discovery_ip: 10.52.0.16
 #            id: "1"
-          129.114.109.52:
+          129.114.108.139:
             ansible_user: "cc"
             ansible_connection: ssh
             port: 8001
-            discovery_ip: 10.52.3.147
+            discovery_ip: 10.52.2.239
             id: "1"
 
 
