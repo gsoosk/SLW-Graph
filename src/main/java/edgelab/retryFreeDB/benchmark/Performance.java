@@ -294,7 +294,7 @@ public class Performance {
         String partitionId = res.getString("partitionId");
         // since default value gets printed with the help text, we are escaping \n there and replacing it with correct value here.
         String payloadDelimiter = res.getString("payloadDelimiter").equals("\\n") ? "\n" : res.getString("payloadDelimiter");
-        warmup = 5;
+        warmup = 10;
         final Long benchmarkTime = res.getLong("benchmarkTime") + warmup;
 //        Integer timeout = res.getInt("timeout") != null ? res.getInt("timeout") : interval.intValue() * 2;
 

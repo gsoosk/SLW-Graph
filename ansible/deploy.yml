@@ -33,6 +33,16 @@
       vars:
         jar: Server
 
+- name: Copy test files to server
+  hosts:
+    - servers
+  become: yes
+  tasks:
+    - include_role:
+        name: build
+        tasks_from: test_init.yml
+
+
 #    - include_role:
 #        name: build
 #        tasks_from: copy_jar.yml

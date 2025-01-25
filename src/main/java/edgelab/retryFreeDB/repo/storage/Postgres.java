@@ -52,11 +52,11 @@ public class Postgres implements Storage{
     }
 
     private static String url = "";
-    private static final String user = "user";
+    private static final String user = "username";
     private static final String password = "password";
 
     private static final long LOCK_THINKING_TIME = 0;
-    public static  long OPERATION_THINKING_TIME = 10;
+    public static  long OPERATION_THINKING_TIME = 0;
 
     private String partitionId;
 
