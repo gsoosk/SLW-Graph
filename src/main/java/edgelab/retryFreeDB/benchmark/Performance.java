@@ -3,10 +3,12 @@ package edgelab.retryFreeDB.benchmark;
 
 
 import edgelab.proto.RetryFreeDBServerGrpc;
-import edgelab.retryFreeDB.Client;
+import edgelab.retryFreeDB.clients.Client;
+import edgelab.retryFreeDB.clients.InteractiveClient;
 import edgelab.retryFreeDB.benchmark.util.RandomGenerator;
 import edgelab.retryFreeDB.benchmark.util.TPCCConfig;
 import edgelab.retryFreeDB.benchmark.util.TPCCUtil;
+import edgelab.retryFreeDB.clients.StoredProcedureClient;
 import io.grpc.ConnectivityState;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -35,15 +37,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.rmi.RemoteException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -356,7 +350,14 @@ public class Performance {
 
 
         Thread.sleep(3000);
-        client = new Client(address, port, res.getString("2PLMode"));
+
+        String transactionMode = res.getString("transactionMode");
+        if (Objects.equals(transactionMode, "interactive")) {
+            client = new InteractiveClient(address, port, res.getString("2PLMode"));
+        }
+        else {
+            client = new StoredProcedureClient(address, "5432", "Listings,Items,Players".split(","), res.getString("2PLMode"));
+        }
         client.setServerConfig(serverConfig);
 
         long sendingStart = System.currentTimeMillis();
@@ -690,7 +691,7 @@ public class Performance {
 
     private void submitRequest(TPCCServerRequest request, Stats stats) {
         Future<Void> future = executor.submit(()->{
-            Client.TransactionResult result = new Client.TransactionResult();
+            InteractiveClient.TransactionResult result = new InteractiveClient.TransactionResult();
             if (request.getType() == TPCCServerRequest.Type.PAYMENT) {
                 Map<String, String> tx = request.getValues();
                 result = client.TPCC_payment(tx.get("warehouseId"),
@@ -729,7 +730,11 @@ public class Performance {
 
             if (result.isSuccess()) {
                 stats.nextCompletion(request.start, 1);
-                stats.addUsefulWork(result.getStart(), result.getWaitingTime());
+                stats.addAblationTimes(result.getStart(),
+                        Long.parseLong(result.getMetrics().get("waiting_time")),
+                        Long.parseLong(result.getMetrics().get("io_time")),
+                        Long.parseLong(result.getMetrics().get("locking_time"))
+                );
                 log.info("request successful {}:{}", request.getType(),request.getValues());
             }
             return null;
@@ -739,7 +744,7 @@ public class Performance {
 
     private void submitRequest(StoreServerRequest request, Stats stats) {
         Future<Void> future = executor.submit(() -> {
-            Client.TransactionResult result = new Client.TransactionResult();
+            InteractiveClient.TransactionResult result = new InteractiveClient.TransactionResult();
 
             if (request.getType() == StoreServerRequest.Type.BUY) {
                 result = client.buyListing(request.getValues().get("PId"), request.getValues().get("LId"));
@@ -787,7 +792,11 @@ public class Performance {
             }
             if (result.isSuccess()) {
                 stats.nextCompletion(request.start, 1);
-                stats.addUsefulWork(result.getStart(), result.getWaitingTime());
+                stats.addAblationTimes(result.getStart(),
+                        Long.parseLong(result.getMetrics().get("waiting_time")),
+                        Long.parseLong(result.getMetrics().get("io_time")),
+                        Long.parseLong(result.getMetrics().get("locking_time"))
+                );
                 log.info("request successful {}", request.getValues());
             }
             return null;
@@ -1198,6 +1207,17 @@ public class Performance {
                 .metavar("HOTWAREHOUSE")
                 .help("number of hot warehouse records in tpcc benchmark.");
 
+        parser.addArgument("--transaction-mode")
+                .action(store())
+                .required(false)
+                .setDefault("interactive")
+                .type(String.class)
+                .dest("transactionMode")
+                .metavar("TRANSACTIONMODE")
+                .help("Transaction execution mode. could be either \"interactive\" or \"storedProcedure\"");
+
+
+
         return parser;
     }
 
@@ -1245,6 +1265,8 @@ public class Performance {
 
         private long usefulWorkTime;
         private long waitedTime;
+        private long ioTime;
+        private long lockingTime;
         private long wastedTimeWork;
 
         // Metrics
@@ -1339,7 +1361,9 @@ public class Performance {
             this.mode = mode;
             this.usefulWorkTime = 0;
             this.waitedTime = 0;
+            this.ioTime = 0;
             this.wastedTimeWork = 0;
+            this.lockingTime = 0;
         }
 
         private void createResultCSVFiles(String resultFilePath) {
@@ -1350,7 +1374,7 @@ public class Performance {
 
                 // Check if the file already exists to avoid overwriting it
                 if (!Files.exists(path)) {
-                    String CSVHeader = "num of records, mode, operation_delay, hot_records, prob, threads, throughput(tx/s), item_read(tx/s), request_retried, total_retries, avg_retry_per_request, avg_latency, max_latency, 50th_latency, 95th_latency, 99th_latency, 99.9th_latency, useful_time, waited_time, wasted_time\n";
+                    String CSVHeader = "num of records, mode, operation_delay, hot_records, prob, threads, throughput(tx/s), item_read(tx/s), request_retried, total_retries, avg_retry_per_request, avg_latency, max_latency, 50th_latency, 95th_latency, 99th_latency, 99.9th_latency, useful_time, waited_time, wasted_time, io_time, locking_time\n";
                     BufferedWriter out = new BufferedWriter(new FileWriter(resultFilePath));
 
                     // Writing the header to output stream
@@ -1466,7 +1490,7 @@ public class Performance {
             int numOfRetries = retries.size();
             int totalRetries = retries.values().stream().mapToInt(Integer::intValue).sum();
             Double avgRetryPerReq = retries.isEmpty() ? 0.0 : retries.values().stream().mapToInt(Integer::intValue).average().getAsDouble();
-            System.out.printf("%d records sent, %f records/sec (%.3f KB/sec) of (%.3f KB/sec), %.3f items/sec, %.2f ms avg latency, %.2f ms max latency, %d ms 50th, %d ms 95th, %d ms 99th, %d ms 99.9th.%n --  requests retried: %d, retries: %d, avg retry per request: %.2f, useful work time: %d, waited time: %d, wasted time: %d\n",
+            System.out.printf("%d records sent, %f records/sec (%.3f KB/sec) of (%.3f KB/sec), %.3f items/sec, %.2f ms avg latency, %.2f ms max latency, %d ms 50th, %d ms 95th, %d ms 99th, %d ms 99.9th.%n --  requests retried: %d, retries: %d, avg retry per request: %.2f, useful work time: %d, waited time: %d, wasted time: %d, IO time: %d, Locking time: %d\n",
                     count,
                     recsPerSec,
                     mbPerSec,
@@ -1483,12 +1507,14 @@ public class Performance {
                     avgRetryPerReq,
                     usefulWorkTime,
                     waitedTime,
-                    wastedTimeWork
+                    wastedTimeWork,
+                    ioTime,
+                    lockingTime
                     );
 
             System.out.println("");
 
-            String resultCSV = String.format("%d,%s,%d,%s,%d,%d,%.2f,%.2f,%d,%d,%.2f,%.2f,%.2f,%d,%d,%d,%d,%d,%d,%d\n",
+            String resultCSV = String.format("%d,%s,%d,%s,%d,%d,%.2f,%.2f,%d,%d,%.2f,%.2f,%.2f,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
                     count,
                     mode,
                     operationDelay,
@@ -1508,7 +1534,9 @@ public class Performance {
                     percs[3],
                     usefulWorkTime,
                     waitedTime,
-                    wastedTimeWork);
+                    wastedTimeWork,
+                    ioTime,
+                    lockingTime);
             try {
                 BufferedWriter out = new BufferedWriter(
                         new FileWriter(resultFilePath, true));
@@ -1591,10 +1619,12 @@ public class Performance {
             this.itemCount++;
         }
 
-        public void addUsefulWork(long start, long waitingTime) {
+        public void addAblationTimes(long start, long waitingTime, long ioTime, long lockingTime) {
             long now = System.currentTimeMillis();
             this.usefulWorkTime += ((now - start) - waitingTime);
             this.waitedTime += waitingTime;
+            this.ioTime += ioTime;
+            this.lockingTime += lockingTime;
         }
 
         public void addWaistedTime(long start) {

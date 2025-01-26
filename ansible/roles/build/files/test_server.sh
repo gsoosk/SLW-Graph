@@ -44,9 +44,9 @@ for THREAD in "${THREADS[@]}"; do
 
                         sleep 10
 
-                        sudo java -jar ../app/Server.jar 8000 localhost 5432 Listings,Items,Players > server.log 2>&1 &
+                        # sudo java -jar ../app/Server.jar 8000 localhost 5432 Listings,Items,Players > server.log 2>&1 &
                         sleep 1
-                        sudo java -jar ../app/Client.jar --address localhost --port 8000 --throughput -1 --benchmark-time 30 --hot-players ../postgres/hot_records_32_items --hot-listings ../postgres/hot_records_32_listings --hot-selection-prob $PROB --max-threads $THREAD --max-retry 10 --read-item-number -1 --max-items-threads 10 --operation-delay $DELAY --2pl-mode $MODE --benchmark-mode store --num-of-warehouses 8 --hot-warehouses 1 > client.log 2>&1 &
+                        sudo java -jar ../app/Client.jar --address localhost --port 8000 --throughput -1 --benchmark-time 30 --hot-players ../postgres/hot_records_32_items --hot-listings ../postgres/hot_records_32_listings --hot-selection-prob $PROB --max-threads $THREAD --max-retry 10 --read-item-number -1 --max-items-threads 10 --operation-delay $DELAY --2pl-mode $MODE --benchmark-mode store --num-of-warehouses 8 --hot-warehouses 1 --transaction-mode storedProcedure > client.log 2>&1 &
 
                         # Define timeout in seconds
                         sleep 60

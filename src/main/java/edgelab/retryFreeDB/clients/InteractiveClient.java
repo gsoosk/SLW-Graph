@@ -1,4 +1,4 @@
-package edgelab.retryFreeDB;
+package edgelab.retryFreeDB.clients;
 
 import edgelab.proto.Config;
 import edgelab.proto.RetryFreeDBServerGrpc;
@@ -8,8 +8,6 @@ import edgelab.proto.TransactionId;
 import edgelab.proto.Result;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import lombok.Getter;
-import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.sql.Timestamp;
@@ -30,36 +28,15 @@ import static edgelab.retryFreeDB.RetryFreeDBConfiguration.READ_TYPE;
 import static edgelab.retryFreeDB.RetryFreeDBConfiguration.WRITE_TYPE;
 
 @Slf4j
-public class Client {
-    public static class TransactionResult {
-        @Getter
-        @Setter
-        boolean success;
-        @Getter
-        @Setter
-        long waitingTime;
-        @Getter
-        long start;
+public class InteractiveClient extends Client {
 
-        @Setter
-        @Getter
-        String message;
-
-        public TransactionResult() {
-            this.success = false;
-            this.waitingTime = 0;
-            this.start = System.currentTimeMillis();
-            this.message = "";
-        }
-
-    }
     private final RetryFreeDBServerGrpc.RetryFreeDBServerBlockingStub blockingStub;
     private final ManagedChannel channel;
     private Map<String, Set<String>> locks = new ConcurrentHashMap<>();
 
     private final String mode;
 
-    public Client(String toConnectAddress, int toConnectPort, String mode)
+    public InteractiveClient(String toConnectAddress, int toConnectPort, String mode)
     {
         this.channel = ManagedChannelBuilder.forAddress(toConnectAddress, toConnectPort).usePlaintext().build();
         this.blockingStub = RetryFreeDBServerGrpc.newBlockingStub(channel);
@@ -78,7 +55,7 @@ public class Client {
     public static void main(String args[])
     {
 
-        Client client = new Client(args[0], Integer.parseInt(args[1]), "slw");
+        InteractiveClient client = new InteractiveClient(args[0], Integer.parseInt(args[1]), "slw");
         Map<String, HashSet<String>> hotRecords = new HashMap<>();
 
 
@@ -208,6 +185,10 @@ public class Client {
             }
         }
     }
+
+
+
+
     public TransactionResult TPCC_newOrderWW(String warehouseId, String districtId, String customerId, String orderLineCount, String allLocals, int[] itemIDs, int[] supplierWarehouseIDs, int[] orderQuantities) {
         TransactionResult res = new TransactionResult();
 
@@ -316,8 +297,7 @@ public class Client {
     private TransactionResult getCommitResult(String tx, TransactionResult res) {
         Result commitResult = commit(tx);
         res.setSuccess(true);
-        if (commitResult.getReturnsMap().containsKey("waiting_time"))
-            res.setWaitingTime(Long.parseLong(commitResult.getReturnsMap().get("waiting_time")));
+        res.setMetrics(commitResult.getReturnsMap());
         return res;
     }
 
@@ -910,6 +890,7 @@ public class Client {
 
 
 //    remoteCalls : 4
+
     public TransactionResult addListing(String PId, String IId, double price) {
         return switch (mode) {
             case "slw" -> addListingSLW(PId, IId, price);

@@ -23,6 +23,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -216,6 +217,7 @@ public class RetryFreeDBServer {
         private void updateDBDataOnRepo(StreamObserver<Result> responseObserver, DBData d, DBTransaction tx) {
             try {
                 String result = "done";
+                tx.startIO();
                 if (d instanceof DBDeleteData)
                     repo.remove(tx.getConnection(), (DBDeleteData) d);
                 else if (d instanceof DBWriteData)
@@ -224,10 +226,12 @@ public class RetryFreeDBServer {
                     repo.insert(tx.getConnection(), (DBInsertData) d);
                 else
                     result = repo.get(tx, d);
+                tx.finishIO();
                 responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(result).build());
                 responseObserver.onCompleted();
             }
             catch (SQLException ex) {
+                tx.finishIO();
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not perform update: " + ex.getMessage()).build());
                 responseObserver.onCompleted();
             }
@@ -305,7 +309,11 @@ public class RetryFreeDBServer {
                 transactions.remove(transactionId.getId());
                 log.warn("{}, Transaciton commited, total waiting time: {}", transactionId.getId(), tx.getWaitingTime());
                 responseObserver.onNext(Result.newBuilder().setStatus(true)
-                        .putReturns("waiting_time", String.valueOf(tx.getWaitingTime())).setMessage("released").build());
+                        .putReturns("waiting_time", String.valueOf(tx.getWaitingTime()))
+                        .putReturns("io_time", String.valueOf(tx.getIoTime()))
+                        .putReturns("locking_time", String.valueOf(tx.getLockingTime()))
+                        .putReturns("retiring_time", String.valueOf(tx.getRetiringTime()))
+                        .setMessage("released").build());
                 responseObserver.onCompleted();
             } catch (SQLException e) {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not release the locks").build());
@@ -345,7 +353,7 @@ public class RetryFreeDBServer {
             DBTransaction tx = transactions.get(request.getTransactionId());
             DBData d = deserilizeDataToDBData(request);
             if (d != null) {
-
+                tx.startRetireLock();
                 try {
                     repo.retireLock(tx, d);
                     responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
@@ -353,8 +361,8 @@ public class RetryFreeDBServer {
                 } catch (Exception e) {
                     responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not retire " + e.getMessage()).build());
                     responseObserver.onCompleted();
-                    return;
                 }
+                tx.finishRetireLock();
             }
 
 
@@ -468,5 +476,90 @@ public class RetryFreeDBServer {
 //        }
 
 
+    }
+
+    public static class RetryFreeDBServiceWrapper {
+        private final RetryFreeDBService service;
+
+        public RetryFreeDBServiceWrapper(RetryFreeDBService service) {
+            this.service = service;
+        }
+
+        // Helper to simplify StreamObserver-based calls
+        private <T> T executeWithObserver(java.util.function.Consumer<StreamObserver<T>> consumer) {
+            CompletableFuture<T> future = new CompletableFuture<>();
+            StreamObserver<T> observer = new StreamObserver<>() {
+                @Override
+                public void onNext(T value) {
+                    future.complete(value);
+                }
+
+                @Override
+                public void onError(Throwable t) {
+                    future.completeExceptionally(t);
+                }
+
+                @Override
+                public void onCompleted() {
+                    // No-op
+                }
+            };
+            consumer.accept(observer);
+            try {
+                return future.get(); // Block and wait for the response
+            } catch (Exception e) {
+                throw new RuntimeException("gRPC method call failed", e);
+            }
+        }
+
+        // Wrapper for beginTransaction
+        public Result beginTransaction(Empty empty) {
+            return executeWithObserver(observer -> service.beginTransaction(empty, observer));
+        }
+
+        // Wrapper for lock
+        public Result lock(Data request) {
+            return executeWithObserver(observer -> service.lock(request, observer));
+        }
+
+        // Wrapper for unlock
+        public Result unlock(Data request) {
+            return executeWithObserver(observer -> service.unlock(request, observer));
+        }
+
+        // Wrapper for lockAndUpdate
+        public Result lockAndUpdate(Data request) {
+            return executeWithObserver(observer -> service.lockAndUpdate(request, observer));
+        }
+
+        // Wrapper for update
+        public Result update(Data request) {
+            return executeWithObserver(observer -> service.update(request, observer));
+        }
+
+        // Wrapper for commitTransaction
+        public Result commitTransaction(TransactionId transactionId) {
+            return executeWithObserver(observer -> service.commitTransaction(transactionId, observer));
+        }
+
+        // Wrapper for rollBackTransaction
+        public Result rollBackTransaction(TransactionId transactionId) {
+            return executeWithObserver(observer -> service.rollBackTransaction(transactionId, observer));
+        }
+
+        // Wrapper for bambooRetireLock
+        public Result bambooRetireLock(Data request) {
+            return executeWithObserver(observer -> service.bambooRetireLock(request, observer));
+        }
+
+        // Wrapper for bambooWaitForCommit
+        public Result bambooWaitForCommit(TransactionId transactionId) {
+            return executeWithObserver(observer -> service.bambooWaitForCommit(transactionId, observer));
+        }
+
+        // Wrapper for setConfig
+        public Result setConfig(Config config) {
+            return executeWithObserver(observer -> service.setConfig(config, observer));
+        }
     }
 }

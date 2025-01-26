@@ -18,7 +18,29 @@ public class DBTransaction {
 
     @Getter
     private long waitingTime;
+    @Getter
+    private long ioTime;
+    @Getter
+    private long lockingTime;
+    @Getter
+    private long retiringTime;
+    @Getter
+    private long initiationTime;
+    @Getter
+    private long unlockingTime;
+    @Getter
+    private long committingTime;
+    @Getter
+    private long waitingForOthersTime;
+
+    private long previousRetireStart = -1;
     private long previousWaitStart = -1;
+    private long previousIOStart = -1;
+    private long previousLockStart = -1;
+    private long previousInitiationStart = -1;
+    private long previousUnlockStart = -1;
+    private long previousCommitStart = -1;
+    private long previousWaitingForOthersStart = -1;
 
     @Getter
     private final Set<String> resources = ConcurrentHashMap.newKeySet();
@@ -30,6 +52,13 @@ public class DBTransaction {
         this.connection = connection;
         commitSemaphore = new AtomicInteger(0);
         this.waitingTime = 0;
+        this.ioTime = 0;
+        this.lockingTime = 0;
+        this.retiringTime = 0;
+        this.initiationTime = 0;
+        this.unlockingTime = 0;
+        this.committingTime = 0;
+        this.waitingForOthersTime = 0;
     }
 
     @Override
@@ -47,7 +76,7 @@ public class DBTransaction {
     }
 
     public void clearResources() {
-        resources.clear();;
+        resources.clear();
     }
 
     public void removeResource(String resource) {
@@ -83,9 +112,58 @@ public class DBTransaction {
         previousWaitStart = System.currentTimeMillis();
     }
 
+    public void startIO() { previousIOStart = System.currentTimeMillis(); }
+
+    public void startLocking() {previousLockStart = System.currentTimeMillis();}
+
+    public void startRetireLock() {previousRetireStart = System.currentTimeMillis();}
+
+    public void startInitiation() {previousInitiationStart = System.currentTimeMillis();}
+
+    public void startUnlocking() {previousUnlockStart = System.currentTimeMillis();}
+
+    public void startCommitting() {previousCommitStart = System.currentTimeMillis();}
+
+    public void startWaitingForOthers() {previousWaitingForOthersStart = System.currentTimeMillis();}
+
 
     public void wakesUp() {
         if (previousWaitStart != -1)
             this.waitingTime += (System.currentTimeMillis() - previousWaitStart);
+    }
+
+    public void finishIO() {
+        if (previousIOStart != -1)
+            this.ioTime += (System.currentTimeMillis() - previousIOStart);
+    }
+
+    public void finishLocking() {
+        if (previousLockStart != -1)
+            this.lockingTime += (System.currentTimeMillis() - previousLockStart);
+    }
+
+    public void finishRetireLock() {
+        if (previousRetireStart != -1)
+            this.retiringTime += (System.currentTimeMillis() - previousRetireStart);
+    }
+
+    public void finishInitiation() {
+        if (previousInitiationStart != -1)
+            this.initiationTime += (System.currentTimeMillis() - previousInitiationStart);
+    }
+
+    public void finishUnlocking() {
+        if (previousUnlockStart != -1)
+            this.unlockingTime += (System.currentTimeMillis() - previousUnlockStart);
+    }
+
+    public void finishCommitting() {
+        if (previousCommitStart != -1)
+            this.committingTime += (System.currentTimeMillis() - previousCommitStart);
+    }
+
+    public void finishWaitingForOthers() {
+        if (previousWaitingForOthersStart != -1)
+            this.waitingForOthersTime += (System.currentTimeMillis() - previousWaitingForOthersStart);
     }
 }

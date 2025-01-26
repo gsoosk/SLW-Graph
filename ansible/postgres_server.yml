@@ -10,6 +10,7 @@
     PGDATA: "/data/postgres"
     POSTGRES_VERSION: "12"
     BACKUP_DIR: "/data/postgres_backup"
+    test_case: "store" # tpcc | store
 
   tasks:
     - name: Install required packages
@@ -44,6 +45,15 @@
         path: "/etc/postgresql/{{ POSTGRES_VERSION }}/main/postgresql.conf"
         regexp: '^#?max_connections'
         line: "max_connections = 1000"
+        state: present
+      notify:
+        - Restart PostgreSQL
+
+    - name: Set default isolation level to READ UNCOMMITTED
+      lineinfile:
+        path: "/etc/postgresql/{{ POSTGRES_VERSION }}/main/postgresql.conf"
+        regexp: '^#?default_transaction_isolation'
+        line: "default_transaction_isolation = 'read uncommitted'"
         state: present
       notify:
         - Restart PostgreSQL

@@ -264,6 +264,7 @@ public class Postgres implements Storage{
     private final Map<String, DBLock> locks = new HashMap<>();
     private final ConcurrentHashMap<String, Set<String>> transactionResources = new ConcurrentHashMap<>();
     public void lock(DBTransaction tx, Set<DBTransaction> toBeAborted, DBData data) throws Exception {
+        tx.startLocking();
         String resource = getResource(data);
         DBLock lock;
         LockType lockType = LockType.WRITE;
@@ -318,6 +319,7 @@ public class Postgres implements Storage{
         }
 
         delay(LOCK_THINKING_TIME);
+        tx.finishLocking();
     }
 
     private static String getResource(DBData data) {
@@ -692,6 +694,7 @@ public class Postgres implements Storage{
     public String get(DBTransaction tx, DBData data) throws SQLException {
         String resource = getResource(data);
 
+        long last = System.currentTimeMillis();
         synchronized (dirtyReads) {
             if (dirtyReads.containsResource(resource)) {
                 log.info("{}: dirty read of {}", tx, resource);
@@ -699,6 +702,8 @@ public class Postgres implements Storage{
                 return dirtyReads.getByResource(resource);
             }
         }
+        log.info("{}: dirty read time: {}",tx.getTimestamp(), System.currentTimeMillis() - last);
+
 
         StringBuilder value = read(tx.getConnection(), data);
         delay(OPERATION_THINKING_TIME);
