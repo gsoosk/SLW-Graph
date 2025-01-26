@@ -92,11 +92,15 @@ public class RetryFreeDBServer {
         @Override
         public void beginTransaction(Empty request, StreamObserver<Result> responseObserver) {
             try  {
+                long startTime = System.currentTimeMillis();
+
                 Connection conn = repo.connect();
                 conn.setAutoCommit(false);
                 long transactionId = lastTransactionId.incrementAndGet();
                 DBTransaction transaction = new DBTransaction(Long.toString(transactionId), conn);
                 transactions.put(Long.toString(transactionId), transaction);
+
+                transaction.finishInitiation(startTime);
                 responseObserver.onNext(Result.newBuilder()
                                         .setStatus(true)
                                         .setMessage(Long.toString(transactionId)).build());
@@ -154,6 +158,7 @@ public class RetryFreeDBServer {
             DBTransaction tx = transactions.get(request.getTransactionId());
             DBData d = deserilizeDataToDBData(request);
             if (d != null) {
+                tx.startUnlocking();
                 try {
                     repo.unlock(tx, d, toBeAbortedTransactions);
                     if (d instanceof DBInsertData)
@@ -165,6 +170,7 @@ public class RetryFreeDBServer {
                     responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not unlock").build());
                     responseObserver.onCompleted();
                 }
+                tx.finishUnlocking();
             }
         }
 
@@ -305,14 +311,20 @@ public class RetryFreeDBServer {
 
             DBTransaction tx = transactions.get(transactionId.getId());
             try {
+                tx.startCommitting();
                 repo.release(tx, toBeAbortedTransactions);
                 transactions.remove(transactionId.getId());
+                tx.finishCommitting();
                 log.warn("{}, Transaciton commited, total waiting time: {}", transactionId.getId(), tx.getWaitingTime());
                 responseObserver.onNext(Result.newBuilder().setStatus(true)
                         .putReturns("waiting_time", String.valueOf(tx.getWaitingTime()))
                         .putReturns("io_time", String.valueOf(tx.getIoTime()))
                         .putReturns("locking_time", String.valueOf(tx.getLockingTime()))
                         .putReturns("retiring_time", String.valueOf(tx.getRetiringTime()))
+                        .putReturns("initiation_time", String.valueOf(tx.getInitiationTime()))
+                        .putReturns("unlocking_time", String.valueOf(tx.getUnlockingTime()))
+                        .putReturns("committing_time", String.valueOf(tx.getCommittingTime()))
+                        .putReturns("waiting_for_others_time", String.valueOf(tx.getWaitingForOthersTime()))
                         .setMessage("released").build());
                 responseObserver.onCompleted();
             } catch (SQLException e) {
@@ -372,6 +384,7 @@ public class RetryFreeDBServer {
             if (isTransactionInvalid(transactionId.getId(), responseObserver)) return;
 
             DBTransaction tx = transactions.get(transactionId.getId());
+            tx.startWaitingForOthers();
             try {
                 log.info("{}: wait for commit", tx);
                 tx.waitForCommit();
@@ -381,8 +394,7 @@ public class RetryFreeDBServer {
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Error:" + e.getMessage()).build());
                 responseObserver.onCompleted();
             }
-
-
+            tx.finishWaitingForOthers();
         }
 
 

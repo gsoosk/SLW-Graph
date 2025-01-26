@@ -37,7 +37,6 @@ public class DBTransaction {
     private long previousWaitStart = -1;
     private long previousIOStart = -1;
     private long previousLockStart = -1;
-    private long previousInitiationStart = -1;
     private long previousUnlockStart = -1;
     private long previousCommitStart = -1;
     private long previousWaitingForOthersStart = -1;
@@ -118,8 +117,6 @@ public class DBTransaction {
 
     public void startRetireLock() {previousRetireStart = System.currentTimeMillis();}
 
-    public void startInitiation() {previousInitiationStart = System.currentTimeMillis();}
-
     public void startUnlocking() {previousUnlockStart = System.currentTimeMillis();}
 
     public void startCommitting() {previousCommitStart = System.currentTimeMillis();}
@@ -147,9 +144,8 @@ public class DBTransaction {
             this.retiringTime += (System.currentTimeMillis() - previousRetireStart);
     }
 
-    public void finishInitiation() {
-        if (previousInitiationStart != -1)
-            this.initiationTime += (System.currentTimeMillis() - previousInitiationStart);
+    public void finishInitiation(long startTime) {
+        this.initiationTime += (System.currentTimeMillis() - startTime);
     }
 
     public void finishUnlocking() {
