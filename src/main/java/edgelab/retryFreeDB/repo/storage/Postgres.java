@@ -1,6 +1,8 @@
 package edgelab.retryFreeDB.repo.storage;
 
 import com.google.common.base.Joiner;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import edgelab.retryFreeDB.repo.storage.DTO.DBData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBDeleteData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBInsertData;
@@ -62,9 +64,27 @@ public class Postgres implements Storage{
 
     private final BiKeyHashMap<String, String, String> dirtyReads = new BiKeyHashMap<>(); // <tx, resource, value>
 
+    private final HikariDataSource dataSource;
+
     public Postgres(String addr, String port) {
         url = "jdbc:postgresql://" + addr + ":" + port + "/postgres";
+
+        HikariConfig connectionPoolConfig = new HikariConfig();
+        connectionPoolConfig.setJdbcUrl(url);
+        connectionPoolConfig.setUsername(user);
+        connectionPoolConfig.setPassword(password);
+
+        connectionPoolConfig.setMaximumPoolSize(200);
+//        connectionPoolConfig.setMinimumIdle(5);
+        connectionPoolConfig.setAutoCommit(false);
+//        connectionPoolConfig.setIdleTimeout(30000);
+//        connectionPoolConfig.setMaxLifetime(1800000);
+//        connectionPoolConfig.setConnectionTimeout(30000);
+
+        this.dataSource = new HikariDataSource(connectionPoolConfig);
+
         setPostgresLogLevel("DEBUG1");
+
     }
 
     private void setPostgresLogLevel(String level) {
@@ -100,9 +120,9 @@ public class Postgres implements Storage{
     public Connection connect() throws SQLException {
         Connection conn = null;
         try {
-            conn = DriverManager.getConnection(url, user, password);
-            conn.setAutoCommit(false);
-            setDeadlockDetectionTimeout(conn, "1s");
+            conn = dataSource.getConnection();
+//            conn.setAutoCommit(false);
+//            setDeadlockDetectionTimeout(conn, "1s");
             log.info("Connection created");
         } catch (SQLException e) {
             log.info(e.getMessage());
