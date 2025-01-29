@@ -6,13 +6,13 @@ import edgelab.proto.Empty;
 import edgelab.proto.TransactionId;
 import edgelab.proto.Result;
 import edgelab.proto.RetryFreeDBServerGrpc;
-import edgelab.retryFreeDB.repo.storage.DBTransaction;
+import edgelab.retryFreeDB.repo.concurrencyControl.DBTransaction;
 import edgelab.retryFreeDB.repo.storage.DTO.DBData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBDeleteData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBInsertData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBTransactionData;
 import edgelab.retryFreeDB.repo.storage.DTO.DBWriteData;
-import edgelab.retryFreeDB.repo.storage.Postgres;
+import edgelab.retryFreeDB.repo.concurrencyControl.ConcurrencyControl;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
@@ -67,14 +67,14 @@ public class RetryFreeDBServer {
 
     @Slf4j
     public static class RetryFreeDBService extends RetryFreeDBServerGrpc.RetryFreeDBServerImplBase {
-        private final Postgres repo;
+        private final ConcurrencyControl repo;
         ConcurrentHashMap<String, DBTransaction> transactions;
 //        Bamboo:
         Set<DBTransaction> toBeAbortedTransactions = ConcurrentHashMap.newKeySet();
         ConcurrentHashMap<String, AtomicInteger> lastIdUsed = new ConcurrentHashMap<>();
         private final AtomicLong lastTransactionId;
         public RetryFreeDBService(String postgresAddress, String postgresPort, String[] tables) throws SQLException {
-            repo = new Postgres(postgresAddress, postgresPort);
+            repo = new ConcurrencyControl(postgresAddress, postgresPort);
             transactions = new ConcurrentHashMap<>();
             lastTransactionId =  new AtomicLong(0);
 
@@ -166,7 +166,7 @@ public class RetryFreeDBServer {
                     else
                         responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage("done").build());
                     responseObserver.onCompleted();
-                } catch (SQLException e) {
+                } catch (Exception e) {
                     responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not unlock").build());
                     responseObserver.onCompleted();
                 }
@@ -225,18 +225,18 @@ public class RetryFreeDBServer {
                 String result = "done";
                 tx.startIO();
                 if (d instanceof DBDeleteData)
-                    repo.remove(tx.getConnection(), (DBDeleteData) d);
+                    repo.remove(tx, (DBDeleteData) d);
                 else if (d instanceof DBWriteData)
-                    repo.update(tx.getConnection(), (DBWriteData) d);
+                    repo.update(tx, (DBWriteData) d);
                 else if(d instanceof DBInsertData)
-                    repo.insert(tx.getConnection(), (DBInsertData) d);
+                    repo.insert(tx, (DBInsertData) d);
                 else
                     result = repo.get(tx, d);
                 tx.finishIO();
                 responseObserver.onNext(Result.newBuilder().setStatus(true).setMessage(result).build());
                 responseObserver.onCompleted();
             }
-            catch (SQLException ex) {
+            catch (Exception ex) {
                 tx.finishIO();
                 responseObserver.onNext(Result.newBuilder().setStatus(false).setMessage("Could not perform update: " + ex.getMessage()).build());
                 responseObserver.onCompleted();
@@ -403,12 +403,12 @@ public class RetryFreeDBServer {
             Map<String, String> configMap = config.getValuesMap();
             try {
                 if (configMap.containsKey("mode")) {
-                    Postgres.setMode(configMap.get("mode"));
+                    ConcurrencyControl.setMode(configMap.get("mode"));
                     log.info("2pl mode is set to :{}", configMap.get("mode"));
                 }
 
                 if (configMap.containsKey("operationDelay")) {
-                    Postgres.OPERATION_THINKING_TIME = Integer.parseInt(configMap.get("operationDelay"));
+                    ConcurrencyControl.OPERATION_THINKING_TIME = Integer.parseInt(configMap.get("operationDelay"));
                     log.info("operation thinking time is set to {}", Integer.parseInt(configMap.get("operationDelay")));
                 }
 

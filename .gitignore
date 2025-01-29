@@ -10,7 +10,10 @@ scripts/tpcc/tpcc_config_temp.xml
 
 /rocksdb_checkpoint/
 /rocksdb_checkpoint
-
+/hot_records
+/hot_records/
+/rocksdb/
+/rocksdb
 
 ./.venv
 

@@ -1,4 +1,4 @@
-package edgelab.retryFreeDB.repo.storage;
+package edgelab.retryFreeDB.repo.concurrencyControl;
 
 import lombok.Getter;
 
