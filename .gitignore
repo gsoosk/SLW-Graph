@@ -8,6 +8,10 @@ scripts/tpcc/init*
 scripts/tpcc/benchbase-postgres
 scripts/tpcc/tpcc_config_temp.xml
 
+/rocksdb_checkpoint/
+/rocksdb_checkpoint
+
+
 ./.venv
 
 
