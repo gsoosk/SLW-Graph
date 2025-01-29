@@ -5,7 +5,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
@@ -30,6 +34,8 @@ public class InitStoreBenchmark {
         }
 
         String checkpointDir = args[0];
+        String hotRecordsDir = args[1];
+
         String dbPath;
         try {
             dbPath = Files.createTempDirectory("rocksdb-tmp").toString();
@@ -52,6 +58,9 @@ public class InitStoreBenchmark {
             // Create checkpoint
             createCheckpoint(db, checkpointDir);
 
+
+            extractHotRecords(db, hotRecordsDir);
+
             db.close();
         } catch (RocksDBException | IOException e) {
             e.printStackTrace();
@@ -64,7 +73,7 @@ public class InitStoreBenchmark {
             String key = "Player:" + i;
             Map<String, String> player = new HashMap<>();
             player.put("Pname", "P" + randomString(NAME_LENGTH));
-            player.put("Pcash", String.valueOf(PLAYER_CASH_MIN + (PLAYER_CASH_MAX - PLAYER_CASH_MIN) * random.nextDouble()));
+            player.put("Pcash", String.valueOf( (int) (PLAYER_CASH_MIN + (PLAYER_CASH_MAX - PLAYER_CASH_MIN) * random.nextDouble())));
             db.put(key.getBytes(), objectToJson(player).getBytes());
         }
         System.out.println("Players inserted.");
@@ -92,7 +101,7 @@ public class InitStoreBenchmark {
             int randomItemId = random.nextInt(NUM_OF_PLAYERS * NUM_OF_EACH_PLAYER_ITEMS);
             Map<String, String> listing = new HashMap<>();
             listing.put("LIId", String.valueOf(randomItemId));
-            listing.put("LPrice", String.valueOf(ITEM_PRICE_MIN + (ITEM_PRICE_MAX - ITEM_PRICE_MIN) * random.nextDouble()));
+            listing.put("LPrice", String.valueOf((int) (ITEM_PRICE_MIN + (ITEM_PRICE_MAX - ITEM_PRICE_MIN) * random.nextDouble())));
             db.put(key.getBytes(), objectToJson(listing).getBytes());
         }
         System.out.println("Listings inserted.");
@@ -101,7 +110,6 @@ public class InitStoreBenchmark {
     private static void createCheckpoint(RocksDB db, String checkpointDir) throws RocksDBException, IOException {
         System.out.println("Creating checkpoint...");
         File checkpointDirectory = new File(checkpointDir);
-        checkpointDirectory.deleteOnExit();
         if (checkpointDirectory.exists()) {
             FileUtils.deleteDirectory(checkpointDirectory);
         }
@@ -121,5 +129,55 @@ public class InitStoreBenchmark {
             e.printStackTrace();
             return null;
         }
+    }
+
+    private static final List<Integer> HOT_RECORDS_PLAYERS = Arrays.asList(1, 2, 4, 8, 16, 32, 64, 128, 256);
+
+
+
+    private static void extractHotRecords(RocksDB db, String hotRecordsDir) throws RocksDBException, IOException {
+        System.out.println("Extracting hot records...");
+        FileUtils.deleteDirectory(Paths.get(hotRecordsDir).toFile());
+        Files.createDirectories(Paths.get(hotRecordsDir));
+
+        for (int num : HOT_RECORDS_PLAYERS) {
+            List<String> randomPlayers = new ArrayList<>();
+            for (int i = 0; i < num; i++) {
+                randomPlayers.add("Player:" + random.nextInt(NUM_OF_PLAYERS));
+            }
+
+            List<String> itemRecords = new ArrayList<>();
+            List<String> itemIds = new ArrayList<>();
+            for (String playerKey : randomPlayers) {
+                byte[] playerData = db.get(playerKey.getBytes());
+                if (playerData != null) {
+                    for (int j = 0; j < NUM_OF_EACH_PLAYER_ITEMS; j++) {
+                        String itemKey = "Item:" + (Integer.parseInt(playerKey.split(":")[1]) * NUM_OF_EACH_PLAYER_ITEMS + j);
+                        byte[] itemData = db.get(itemKey.getBytes());
+                        if (itemData != null) {
+                            String itemId = itemKey.split(":")[1];
+                            itemRecords.add(itemId + "," + playerKey.split(":")[1]);
+                            itemIds.add(itemId);
+                        }
+                    }
+                }
+            }
+            Files.write(Paths.get(hotRecordsDir, "hot_records_" + num + "_items"), itemRecords);
+
+            List<String> listingRecords = new ArrayList<>();
+            for (String itemId : itemIds) {
+                String listingKey = "Listing:" + itemId;
+                byte[] listingData = db.get(listingKey.getBytes());
+                if (listingData != null) {
+                    Map<String, String> listingMap = objectMapper.readValue(new String(listingData), Map.class);
+                    String lId = listingKey.split(":")[1];
+                    String lIId = listingMap.get("LIId");
+                    String lPrice = listingMap.get("LPrice");
+                    listingRecords.add(lId + "," + lIId + "," + lPrice);
+                }
+            }
+            Files.write(Paths.get(hotRecordsDir, "hot_records_" + num + "_listings"), listingRecords);
+        }
+        System.out.println("Hot records extracted.");
     }
 }
